@@ -9,5 +9,5 @@ window.FIREBASE_CONFIG = {
 };
 
 window.APPS_SCRIPT_URL = "window.APPS_SCRIPT_URL = "https://script.google.com/a/macros/usach.cl/s/AKfycbx56WfFlOqA3NGCimFI_VTdXmqv3qcQkbrl4hBFVJE4J6W77D54xcC2zihsyoy4Oq40Bw/exec";
-";
+
 window.DELY_SETTINGS = { MAX_FILE_MB: 20 };

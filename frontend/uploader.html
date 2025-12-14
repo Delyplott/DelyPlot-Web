@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Uploader - DelyPlott</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f1a;
+      --card: rgba(255,255,255,.06);
+      --muted: rgba(255,255,255,.7);
+      --text: rgba(255,255,255,.92);
+      --border: rgba(255,255,255,.12);
+      --btn: rgba(255,255,255,.10);
+      --btn2: rgba(255,255,255,.16);
+      --ok: #35d07f;
+      --err: #ff5a67;
+      --warn: #ffb020;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(900px 500px at 20% 0%, rgba(196, 54, 255, .25), transparent 60%),
+                  radial-gradient(900px 500px at 80% 0%, rgba(0, 255, 255, .16), transparent 60%),
+                  var(--bg);
+      color: var(--text);
+      padding: 16px;
+    }
+    .wrap { max-width: 780px; margin: 0 auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0 0 6px; font-size: 18px; }
+    .tiny { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .row > * { flex: 1; min-width: 220px; }
+
+    .drop {
+      border: 1px dashed var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(0,0,0,.20);
+      cursor: pointer;
+      transition: transform .08s ease, border-color .15s ease, background .15s ease;
+    }
+    .drop.drag {
+      border-color: rgba(0,255,255,.55);
+      background: rgba(0,255,255,.06);
+      transform: translateY(-1px);
+    }
+    .drop strong { display: block; margin-bottom: 6px; }
+    .drop small { color: var(--muted); }
+
+    input[type="file"] { display: none; }
+
+    .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    button {
+      border: 1px solid var(--border);
+      background: var(--btn);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background .15s ease, transform .08s ease;
+      font-weight: 600;
+    }
+    button:hover { background: var(--btn2); }
+    button:active { transform: translateY(1px); }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .list {
+      margin-top: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+    .item {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(0,0,0,.18);
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .meta { display: flex; flex-direction: column; gap: 2px; }
+    .name { font-weight: 700; font-size: 13px; }
+    .sub { color: var(--muted); font-size: 12px; }
+
+    .pill {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.06);
+      white-space: nowrap;
+    }
+    .pill.ok { border-color: rgba(53,208,127,.4); color: var(--ok); }
+    .pill.err { border-color: rgba(255,90,103,.4); color: var(--err); }
+    .pill.warn { border-color: rgba(255,176,32,.4); color: var(--warn); }
+
+    .log {
+      margin-top: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      background: rgba(0,0,0,.25);
+      border: 1px solid var(--border);
+      padding: 10px;
+      border-radius: 12px;
+      max-height: 220px;
+      overflow: auto;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Subir archivos a Drive</h1>
+      <p class="tiny">
+        Pedido: <b id="oid"></b><br>
+        Esta ventana sube archivos a Google Drive sin problemas de CORS y luego devuelve los IDs al sitio.
+      </p>
+
+      <label class="drop" id="drop">
+        <input id="files" type="file" multiple />
+        <strong>Haga clic o arrastre archivos aquí</strong>
+        <small>PDF / imágenes. Límite aproximado por archivo: ~45 MB (Apps Script).</small>
+      </label>
+
+      <div class="btns">
+        <button id="btnUpload" type="button">Subir</button>
+        <button id="btnClear" type="button">Limpiar</button>
+        <button id="btnClose" type="button">Cerrar</button>
+      </div>
+
+      <div class="list" id="list" aria-live="polite"></div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    // ===== Config =====
+    const ORDER_ID = "<?= orderId ?>";
+    const GITHUB_ORIGIN = "https://delyplott.github.io"; // ajuste si usa dominio propio
+
+    // ===== UI helpers =====
+    const $ = (id) => document.getElementById(id);
+    const logEl = $("log");
+    const listEl = $("list");
+    const input = $("files");
+    const drop = $("drop");
+    const btnUpload = $("btnUpload");
+    const btnClear = $("btnClear");
+    const btnClose = $("btnClose");
+
+    $("oid").textContent = ORDER_ID || "—";
+
+    let filesState = [];
+
+    function log(msg) {
+      logEl.textContent += msg + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(2) + " " + sizes[i];
+    }
+
+    function render() {
+      listEl.innerHTML = "";
+      if (!filesState.length) {
+        listEl.innerHTML = `<p class="tiny">No hay archivos seleccionados.</p>`;
+        return;
+      }
+
+      filesState.forEach((f, idx) => {
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="meta">
+            <div class="name">${escapeHtml(f.name)}</div>
+            <div class="sub">${escapeHtml(f.type || "application/octet-stream")} · ${formatBytes(f.size)}</div>
+          </div>
+          <div class="row" style="justify-content:flex-end; gap:8px; flex-wrap:nowrap;">
+            <span class="pill ${f.statusClass || ""}">${escapeHtml(f.status || "pendiente")}</span>
+            <button type="button" data-rm="${idx}" title="Quitar">✕</button>
+          </div>
+        `;
+        listEl.appendChild(div);
+      });
+
+      listEl.querySelectorAll("button[data-rm]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const idx = Number(btn.getAttribute("data-rm"));
+          filesState.splice(idx, 1);
+          render();
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function setBusy(busy) {
+      btnUpload.disabled = busy;
+      btnClear.disabled = busy;
+      drop.style.pointerEvents = busy ? "none" : "auto";
+      drop.style.opacity = busy ? "0.7" : "1";
+    }
+
+    // ===== File read =====
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = () => reject(new Error("No se pudo leer el archivo"));
+        fr.onload = () => {
+          const s = String(fr.result || "");
+          const idx = s.indexOf("base64,");
+          resolve(idx >= 0 ? s.substring(idx + 7) : s);
+        };
+        fr.readAsDataURL(file);
+      });
+    }
+
+    // ===== Handlers =====
+    function addFiles(fileList) {
+      const arr = Array.from(fileList || []);
+      for (const f of arr) {
+        filesState.push({
+          file: f,
+          name: f.name,
+          type: f.type || "application/octet-stream",
+          size: f.size,
+          status: "pendiente",
+          statusClass: ""
+        });
+      }
+      render();
+    }
+
+    drop.addEventListener("click", () => input.click());
+    input.addEventListener("change", (e) => addFiles(e.target.files));
+
+    ["dragenter","dragover"].forEach(evt => {
+      drop.addEventListener(evt, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        drop.classList.add("drag");
+      });
+    });
+    ["dragleave","drop"].forEach(evt => {
+      drop.addEventListener(evt, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        drop.classList.remove("drag");
+      });
+    });
+    drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+
+    btnClear.addEventListener("click", () => {
+      filesState = [];
+      input.value = "";
+      logEl.textContent = "";
+      render();
+    });
+
+    btnClose.addEventListener("click", () => window.close());
+
+    // ===== Upload logic =====
+    async function uploadAll() {
+      if (!filesState.length) {
+        alert("Seleccione al menos un archivo.");
+        return;
+      }
+
+      setBusy(true);
+      log("Iniciando subida…");
+
+      const results = [];
+      for (let i = 0; i < filesState.length; i++) {
+        const item = filesState[i];
+        item.status = `leyendo…`;
+        item.statusClass = "warn";
+        render();
+
+        try {
+          const base64 = await fileToBase64(item.file);
+
+          item.status = `subiendo (${i+1}/${filesState.length})…`;
+          item.statusClass = "warn";
+          render();
+
+          const r = await new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(err => reject(new Error(err?.message || String(err))))
+              .uploadFromUi({
+                orderId: ORDER_ID,
+                filename: item.name,
+                contentType: item.type,
+                base64
+              });
+          });
+
+          if (!r || !r.ok) throw new Error("Respuesta inválida del servidor");
+
+          item.status = "subido";
+          item.statusClass = "ok";
+          render();
+
+          results.push({
+            filename: item.name,
+            fileId: r.fileId,
+            contentType: item.type,
+            size: item.size
+          });
+
+          log(`OK: ${item.name} -> ${r.fileId}`);
+
+        } catch (e) {
+          item.status = "error";
+          item.statusClass = "err";
+          render();
+          log(`ERROR: ${item.name} -> ${e.message || String(e)}`);
+        }
+      }
+
+      // Enviar los resultados a la página que abrió esta ventana
+      // (solo si hay opener y hay al menos 1 archivo subido)
+      if (window.opener && results.length) {
+        try {
+          window.opener.postMessage(
+            { type: "drive_upload_done", orderId: ORDER_ID, files: results },
+            GITHUB_ORIGIN
+          );
+          log("Enviados IDs al sitio principal.");
+        } catch (e) {
+          log("No se pudieron enviar IDs al sitio principal: " + (e.message || String(e)));
+        }
+      } else {
+        log("No hay opener o no se subió ningún archivo.");
+      }
+
+      setBusy(false);
+
+      // Si todo salió bien (al menos 1 archivo), cerramos automáticamente
+      if (results.length) {
+        log("Listo. Esta ventana se cerrará.");
+        setTimeout(() => window.close(), 900);
+      } else {
+        log("Terminado con errores. Revise el log.");
+      }
+    }
+
+    btnUpload.addEventListener("click", uploadAll);
+
+    // Render inicial
+    render();
+    log("Listo. Seleccione archivos y presione Subir.");
+  </script>
+</body>
+</html>

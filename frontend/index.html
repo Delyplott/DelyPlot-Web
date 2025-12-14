@@ -12,22 +12,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="styles.css" />
+  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
+  <link rel="stylesheet" href="/DelyPlot-Web/styles.css" />
 
   <!-- Firebase (Compat para usar <script> clásico) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 
-  <!-- Config del frontend (DEBE existir en /frontend/firebase-config.js) -->
-  <script src="firebase-config.js" onerror="window.__FIREBASE_CONFIG_LOAD_FAILED__=true;"></script>
+  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
+  <script src="/DelyPlot-Web/firebase-config.js" onerror="window.__FIREBASE_CONFIG_LOAD_FAILED__=true;"></script>
   <script>
     if (window.__FIREBASE_CONFIG_LOAD_FAILED__) {
       alert(
-        "Falta firebase-config.js (no se pudo cargar).\n\n" +
-        "Crea/asegura el archivo en la carpeta /frontend/ con:\n" +
-        "window.FIREBASE_CONFIG = {...} y window.APPS_SCRIPT_URL = '...';\n\n" +
-        "Luego haz commit/push y recarga (Ctrl+F5)."
+        "No se pudo cargar /DelyPlot-Web/firebase-config.js.\n\n" +
+        "Verifica que el archivo exista en la carpeta /frontend/ del repo y esté publicado.\n" +
+        "Luego haz commit/push y recarga con Ctrl+F5."
       );
     }
   </script>
@@ -238,7 +238,7 @@
     </div>
   </footer>
 
-  <!-- Tu JS principal (debe ir después de firebase-config.js) -->
-  <script src="script.js"></script>
+  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
+  <script src="/DelyPlot-Web/script.js"></script>
 </body>
 </html>

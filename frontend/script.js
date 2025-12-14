@@ -318,4 +318,254 @@ function setUIOrderStatus(orderId, status, hint = "") {
   if (orderHintEl) orderHintEl.textContent = hint || "";
 }
 
-function
+function renderQuote(quote) {
+  if (!quote) return;
+
+  if (quoteWait) quoteWait.classList.add("hidden");
+  if (quoteContainer) quoteContainer.classList.remove("hidden");
+
+  if (quoteBreakdown) {
+    quoteBreakdown.innerHTML = "";
+    const steps = Array.isArray(quote.steps) ? quote.steps : [];
+    for (const s of steps) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span>${s.label}</span><span>${s.value}</span>`;
+      quoteBreakdown.appendChild(li);
+    }
+  }
+  if (quoteTotal) quoteTotal.textContent = formatCLP(quote.total_clp || 0);
+  if (quoteFormula) quoteFormula.textContent = quote.formula || "";
+}
+
+// ————————————————————————————————————————————————
+//  Envío: crear pedido + subir a Drive (popup) + escuchar Firestore
+// ————————————————————————————————————————————————
+let unsubscribeOrder = null;
+
+if (form) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+
+    if (!filesState.length) { alert("Adjunta al menos un archivo."); return; }
+    const tyc = $("#tyc");
+    if (tyc && !tyc.checked) { alert("Acepta la casilla para continuar."); return; }
+
+    const btn = form.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+
+    try {
+      if (statusEl) statusEl.textContent = "Autenticando…";
+      const user = await ensureAnonAuth();
+
+      const fd = new FormData(form);
+      renderBankData();
+      renderSummary(fd);
+
+      // 1) Crear pedido en Firestore
+      if (statusEl) statusEl.textContent = "Creando pedido…";
+
+      const primary = filesState[0];
+      const orderPayload = {
+        uid: user.uid,
+        status: "uploaded",
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        customer: {
+          name: String(fd.get("nombre") || ""),
+          phone: String(fd.get("telefono") || ""),
+          email: String(fd.get("email") || "")
+        },
+        options: {
+          size: String(fd.get("tamano") || ""),
+          color: String(fd.get("color") || ""),
+          delivery: String(fd.get("entrega") || "")
+        },
+        notes: String(fd.get("notas") || ""),
+        file: {
+          provider: "drive",
+          driveFileId: null,
+          filename: primary.name,
+          contentType: primary.type || "application/octet-stream",
+          size: primary.size
+        },
+        files: filesState.map(f => ({
+          provider: "drive",
+          driveFileId: null,
+          filename: f.name,
+          contentType: f.type || "application/octet-stream",
+          size: f.size
+        }))
+      };
+
+      const docRef = await db.collection("orders").add(orderPayload);
+      const orderId = docRef.id;
+
+      // UI transición
+      if (orderCard) orderCard.classList.add("hidden");
+      if (quoteCard) {
+        quoteCard.classList.remove("hidden");
+        quoteCard.setAttribute("aria-hidden", "false");
+      }
+
+      setUIOrderStatus(orderId, "uploaded", "Se abrirá una ventana para subir archivos a Drive…");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+
+      // 2) Subir a Drive SIN CORS: abrir uploader (Apps Script UI)
+      if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
+
+      const popup = openUploader(orderId);
+
+      if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
+      setUIOrderStatus(orderId, "uploaded", "En la ventana emergente, seleccione los mismos archivos y presione “Subir”.");
+
+      const uploaded = await waitUploaderResult(orderId, popup);
+
+      if (!uploaded.length) {
+        throw new Error("No se subió ningún archivo en el uploader.");
+      }
+
+      // Construir patch para Firestore
+      // Preferimos metadatos locales si coinciden por nombre
+      const selectedByName = new Map(filesState.map(f => [f.name, f]));
+      const normalizedFiles = uploaded.map(u => {
+        const sel = selectedByName.get(u.filename);
+        return {
+          provider: "drive",
+          driveFileId: u.fileId,
+          filename: u.filename,
+          contentType: sel?.type || u.contentType || "application/octet-stream",
+          size: sel?.size ?? u.size ?? null
+        };
+      });
+
+      const first = normalizedFiles[0];
+
+      if (statusEl) statusEl.textContent = "Actualizando pedido…";
+      await docRef.update({
+        files: normalizedFiles,
+        file: {
+          provider: "drive",
+          driveFileId: first.driveFileId,
+          filename: first.filename,
+          contentType: first.contentType,
+          size: first.size
+        },
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      setUIOrderStatus(orderId, "uploaded", "Archivo subido. En espera de cotización…");
+      if (statusEl) statusEl.textContent = "";
+
+      // 3) Escuchar el pedido en tiempo real
+      if (unsubscribeOrder) unsubscribeOrder();
+      unsubscribeOrder = docRef.onSnapshot((snap) => {
+        if (!snap.exists) return;
+        const data = snap.data() || {};
+        const st = data.status || "—";
+
+        let hint = "";
+        if (st === "uploaded") hint = "En cola para análisis…";
+        if (st === "in_progress") hint = "Analizando y generando preview…";
+        if (st === "quoted") hint = "Cotización lista.";
+        if (st === "error") hint = "Ocurrió un error. Revisa el detalle.";
+
+        setUIOrderStatus(orderId, st, hint);
+
+        // Preview
+        const pv = data.preview;
+        if (pv && pv.url && previewLink) {
+          previewLink.href = pv.url;
+          previewLink.classList.remove("hidden");
+        }
+
+        // Quote oficial
+        const q = data.quote;
+        if (q && q.total_clp != null) {
+          renderQuote(q);
+        }
+
+        // Error
+        if (st === "error" && data.error && data.error.message) {
+          alert("Error: " + data.error.message);
+        }
+      });
+
+    } catch (err) {
+      console.error(err);
+      alert("No se pudo enviar el pedido: " + (err?.message || String(err)));
+      if (orderCard) orderCard.classList.remove("hidden");
+      if (quoteCard) quoteCard.classList.add("hidden");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+// Copiar datos bancarios
+const copyBtn = $("#copy-btn");
+if (copyBtn) {
+  copyBtn.addEventListener("click", async () => {
+    const bank = $("#bank-data");
+    if (!bank) return;
+
+    const nodes = Array.from(bank.querySelectorAll("dt,dd")).map(el => el.textContent);
+    let text = "";
+    for (let i = 0; i < nodes.length; i += 2) {
+      const k = nodes[i] ?? "";
+      const v = nodes[i + 1] ?? "";
+      text += `${k}: ${v}\n`;
+    }
+    text = text.trim();
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Datos de transferencia copiados 👍");
+    } catch {
+      alert("No se pudo copiar automáticamente. Selecciona y copia manualmente.");
+    }
+  });
+}
+
+// Nuevo pedido
+const newOrderBtn = $("#new-order");
+if (newOrderBtn) {
+  newOrderBtn.addEventListener("click", () => {
+    if (unsubscribeOrder) { unsubscribeOrder(); unsubscribeOrder = null; }
+
+    if (quoteCard) {
+      quoteCard.classList.add("hidden");
+      quoteCard.setAttribute("aria-hidden", "true");
+    }
+    if (orderCard) orderCard.classList.remove("hidden");
+    if (form) form.reset();
+
+    filesState = [];
+    renderFiles();
+
+    // limpiar UI quote
+    if (previewLink) previewLink.classList.add("hidden");
+    if (quoteContainer) quoteContainer.classList.add("hidden");
+    if (quoteWait) quoteWait.classList.remove("hidden");
+    if (quoteBreakdown) quoteBreakdown.innerHTML = "";
+    if (quoteTotal) quoteTotal.textContent = "—";
+    if (quoteFormula) quoteFormula.textContent = "";
+  });
+}
+
+// Navegación activa por ancla (tu base)
+const links = $$(".nav .link").filter(a => {
+  const href = a.getAttribute("href");
+  return href && href.startsWith("#");
+});
+const sections = ["#order-card", "#como-funciona", "#sobre-nosotros", "#contacto"]
+  .map(id => $(id)).filter(Boolean);
+
+function onScroll() {
+  const top = window.scrollY + 110;
+  let activeIndex = 0;
+  sections.forEach((sec, i) => { if (sec.offsetTop <= top) activeIndex = i; });
+  links.forEach((a, i) => a.classList.toggle("active", i === activeIndex));
+}
+window.addEventListener("scroll", onScroll);
+onScroll();

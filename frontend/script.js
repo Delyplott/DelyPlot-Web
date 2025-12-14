@@ -108,47 +108,83 @@ async function ensureAnonAuth() {
 }
 
 // ————————————————————————————————————————————————
-//  Drive Bridge helpers
+//  Drive Uploader (Apps Script UI - SIN CORS)
 // ————————————————————————————————————————————————
-const APPS_SCRIPT_URL = window.APPS_SCRIPT_URL;
+const APPS_SCRIPT_URL = window.APPS_SCRIPT_URL;             // Debe ser la URL .../exec del Web App
 const SETTINGS = window.DELY_SETTINGS || { MAX_FILE_MB: 20 };
 
-async function bridgePost(obj) {
+function buildUploaderUrl(orderId) {
   if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL en firebase-config.js");
-
-  const payload = encodeURIComponent(JSON.stringify(obj));
-  const body = `payload=${payload}`;
-
-  const res = await fetch(APPS_SCRIPT_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-    body
-  });
-
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { ok: false, error: "Respuesta no JSON", raw: text }; }
-
-  if (!data.ok) throw new Error(data.error || "Bridge error");
-  return data;
+  let u;
+  try {
+    u = new URL(APPS_SCRIPT_URL);
+  } catch {
+    throw new Error("APPS_SCRIPT_URL inválida (debe ser URL absoluta del Web App /exec).");
+  }
+  u.searchParams.set("ui", "uploader");
+  u.searchParams.set("orderId", String(orderId || ""));
+  return u.toString();
 }
 
-function fileToBase64(file) {
+function openUploader(orderId) {
+  const url = buildUploaderUrl(orderId);
+  const w = window.open(url, "dely_uploader", "width=560,height=760");
+  if (!w) throw new Error("Popup bloqueado. Habilite ventanas emergentes para continuar.");
+  return w;
+}
+
+/**
+ * Espera el postMessage desde Apps Script:
+ * { type:"drive_upload_done", orderId, files:[{filename,fileId,contentType,size}] }
+ */
+function waitUploaderResult(orderId, popupWindow) {
   return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onerror = () => reject(new Error("No se pudo leer el archivo"));
-    fr.onload = () => {
-      // data:*/*;base64,XXXX
-      const s = String(fr.result || "");
-      const idx = s.indexOf("base64,");
-      resolve(idx >= 0 ? s.substring(idx + 7) : s);
-    };
-    fr.readAsDataURL(file);
+    const TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+    let done = false;
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Tiempo de espera agotado. No llegó respuesta del uploader."));
+    }, TIMEOUT_MS);
+
+    const poll = setInterval(() => {
+      if (done) return;
+      if (popupWindow && popupWindow.closed) {
+        cleanup();
+        reject(new Error("El uploader se cerró antes de terminar la subida."));
+      }
+    }, 500);
+
+    function onMsg(ev) {
+      // Apps Script HTML suele venir desde:
+      // https://script.google.com o https://script.googleusercontent.com
+      const okOrigin =
+        ev.origin === "https://script.google.com" ||
+        ev.origin === "https://script.googleusercontent.com";
+
+      if (!okOrigin) return;
+
+      const msg = ev.data || {};
+      if (msg.type !== "drive_upload_done") return;
+      if (String(msg.orderId || "") !== String(orderId || "")) return;
+
+      done = true;
+      cleanup();
+      resolve(Array.isArray(msg.files) ? msg.files : []);
+    }
+
+    function cleanup() {
+      clearTimeout(timer);
+      clearInterval(poll);
+      window.removeEventListener("message", onMsg);
+    }
+
+    window.addEventListener("message", onMsg);
   });
 }
 
 // ————————————————————————————————————————————————
-//  Manejo de archivos (dropzone + lista)
+//  Manejo de archivos (dropzone + lista)  [solo UI/summary]
 // ————————————————————————————————————————————————
 const input = $("#file-input");
 const dropzone = $("#dropzone");
@@ -282,236 +318,4 @@ function setUIOrderStatus(orderId, status, hint = "") {
   if (orderHintEl) orderHintEl.textContent = hint || "";
 }
 
-function renderQuote(quote) {
-  if (!quote) return;
-
-  if (quoteWait) quoteWait.classList.add("hidden");
-  if (quoteContainer) quoteContainer.classList.remove("hidden");
-
-  if (quoteBreakdown) {
-    quoteBreakdown.innerHTML = "";
-    const steps = Array.isArray(quote.steps) ? quote.steps : [];
-    for (const s of steps) {
-      const li = document.createElement("li");
-      li.innerHTML = `<span>${s.label}</span><span>${s.value}</span>`;
-      quoteBreakdown.appendChild(li);
-    }
-  }
-  if (quoteTotal) quoteTotal.textContent = formatCLP(quote.total_clp || 0);
-  if (quoteFormula) quoteFormula.textContent = quote.formula || "";
-}
-
-// ————————————————————————————————————————————————
-//  Envío: crear pedido + subir a Drive + escuchar Firestore
-// ————————————————————————————————————————————————
-let unsubscribeOrder = null;
-
-if (form) {
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (!form.reportValidity()) return;
-
-    if (!filesState.length) { alert("Adjunta al menos un archivo."); return; }
-    const tyc = $("#tyc");
-    if (tyc && !tyc.checked) { alert("Acepta la casilla para continuar."); return; }
-
-    const btn = form.querySelector('button[type="submit"]');
-    if (btn) btn.disabled = true;
-
-    try {
-      if (statusEl) statusEl.textContent = "Autenticando…";
-      const user = await ensureAnonAuth();
-
-      const fd = new FormData(form);
-      renderBankData();
-      renderSummary(fd);
-
-      // 1) Crear pedido en Firestore
-      if (statusEl) statusEl.textContent = "Creando pedido…";
-
-      const primary = filesState[0];
-      const orderPayload = {
-        uid: user.uid,
-        status: "uploaded",
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        customer: {
-          name: String(fd.get("nombre") || ""),
-          phone: String(fd.get("telefono") || ""),
-          email: String(fd.get("email") || "")
-        },
-        options: {
-          size: String(fd.get("tamano") || ""),
-          color: String(fd.get("color") || ""),
-          delivery: String(fd.get("entrega") || "")
-        },
-        notes: String(fd.get("notas") || ""),
-        file: {
-          provider: "drive",
-          driveFileId: null,
-          filename: primary.name,
-          contentType: primary.type || "application/octet-stream",
-          size: primary.size
-        },
-        files: filesState.map(f => ({
-          provider: "drive",
-          driveFileId: null,
-          filename: f.name,
-          contentType: f.type || "application/octet-stream",
-          size: f.size
-        }))
-      };
-
-      const docRef = await db.collection("orders").add(orderPayload);
-      const orderId = docRef.id;
-
-      // UI transición
-      if (orderCard) orderCard.classList.add("hidden");
-      if (quoteCard) {
-        quoteCard.classList.remove("hidden");
-        quoteCard.setAttribute("aria-hidden", "false");
-      }
-      setUIOrderStatus(orderId, "uploaded", "Subiendo archivo…");
-      window.scrollTo({ top: 0, behavior: "smooth" });
-
-      // 2) Subir archivos a Drive (bridge)
-      for (let i = 0; i < filesState.length; i++) {
-        const f = filesState[i];
-        if (statusEl) statusEl.textContent = `Subiendo a Drive… (${i + 1}/${filesState.length})`;
-
-        const base64 = await fileToBase64(f);
-        const up = await bridgePost({
-          action: "upload",
-          orderId,
-          filename: f.name,
-          contentType: f.type || "application/octet-stream",
-          base64
-          // recaptchaToken: "..." (opcional)
-        });
-
-        // Actualizar Firestore con driveFileId
-        const patch = {};
-        patch[`files.${i}.driveFileId`] = up.fileId;
-
-        // para compat con worker: usar el primer archivo como file.driveFileId
-        if (i === 0) patch["file.driveFileId"] = up.fileId;
-
-        patch.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-        await docRef.update(patch);
-      }
-
-      setUIOrderStatus(orderId, "uploaded", "Archivo subido. En espera de cotización…");
-
-      // 3) Escuchar el pedido en tiempo real
-      if (unsubscribeOrder) unsubscribeOrder();
-      unsubscribeOrder = docRef.onSnapshot((snap) => {
-        if (!snap.exists) return;
-        const data = snap.data() || {};
-        const st = data.status || "—";
-
-        let hint = "";
-        if (st === "uploaded") hint = "En cola para análisis…";
-        if (st === "in_progress") hint = "Analizando y generando preview…";
-        if (st === "quoted") hint = "Cotización lista.";
-        if (st === "error") hint = "Ocurrió un error. Revisa el detalle.";
-
-        setUIOrderStatus(orderId, st, hint);
-
-        // Preview
-        const pv = data.preview;
-        if (pv && pv.url && previewLink) {
-          previewLink.href = pv.url;
-          previewLink.classList.remove("hidden");
-        }
-
-        // Quote oficial
-        const q = data.quote;
-        if (q && q.total_clp != null) {
-          renderQuote(q);
-        }
-
-        // Error
-        if (st === "error" && data.error && data.error.message) {
-          alert("Error: " + data.error.message);
-        }
-      });
-
-      if (statusEl) statusEl.textContent = "";
-    } catch (err) {
-      console.error(err);
-      alert("No se pudo enviar el pedido: " + (err?.message || String(err)));
-      if (orderCard) orderCard.classList.remove("hidden");
-      if (quoteCard) quoteCard.classList.add("hidden");
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  });
-}
-
-// Copiar datos bancarios
-const copyBtn = $("#copy-btn");
-if (copyBtn) {
-  copyBtn.addEventListener("click", async () => {
-    const bank = $("#bank-data");
-    if (!bank) return;
-
-    const nodes = Array.from(bank.querySelectorAll("dt,dd")).map(el => el.textContent);
-    let text = "";
-    for (let i = 0; i < nodes.length; i += 2) {
-      const k = nodes[i] ?? "";
-      const v = nodes[i + 1] ?? "";
-      text += `${k}: ${v}\n`;
-    }
-    text = text.trim();
-
-    try {
-      await navigator.clipboard.writeText(text);
-      alert("Datos de transferencia copiados 👍");
-    } catch {
-      alert("No se pudo copiar automáticamente. Selecciona y copia manualmente.");
-    }
-  });
-}
-
-// Nuevo pedido
-const newOrderBtn = $("#new-order");
-if (newOrderBtn) {
-  newOrderBtn.addEventListener("click", () => {
-    if (unsubscribeOrder) { unsubscribeOrder(); unsubscribeOrder = null; }
-
-    if (quoteCard) {
-      quoteCard.classList.add("hidden");
-      quoteCard.setAttribute("aria-hidden", "true");
-    }
-    if (orderCard) orderCard.classList.remove("hidden");
-    if (form) form.reset();
-
-    filesState = [];
-    renderFiles();
-
-    // limpiar UI quote
-    if (previewLink) previewLink.classList.add("hidden");
-    if (quoteContainer) quoteContainer.classList.add("hidden");
-    if (quoteWait) quoteWait.classList.remove("hidden");
-    if (quoteBreakdown) quoteBreakdown.innerHTML = "";
-    if (quoteTotal) quoteTotal.textContent = "—";
-    if (quoteFormula) quoteFormula.textContent = "";
-  });
-}
-
-// Navegación activa por ancla (tu base)
-const links = $$(".nav .link").filter(a => {
-  const href = a.getAttribute("href");
-  return href && href.startsWith("#");
-});
-const sections = ["#order-card", "#como-funciona", "#sobre-nosotros", "#contacto"]
-  .map(id => $(id)).filter(Boolean);
-
-function onScroll() {
-  const top = window.scrollY + 110;
-  let activeIndex = 0;
-  sections.forEach((sec, i) => { if (sec.offsetTop <= top) activeIndex = i; });
-  links.forEach((a, i) => a.classList.toggle("active", i === activeIndex));
-}
-window.addEventListener("scroll", onScroll);
-onScroll();
+function

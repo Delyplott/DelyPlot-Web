@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b0f1a" />
   <title>Dely Plott Express — Ploteos y Doblados</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,14 +14,25 @@
 
   <link rel="stylesheet" href="styles.css" />
 
-  <!-- Firebase (Compat para usar <script> no-module) -->
+  <!-- Firebase (Compat para usar <script> clásico) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 
-  <!-- Config NO versionada -->
-  <script src="firebase-config.js"></script>
+  <!-- Config del frontend (DEBE existir en /frontend/firebase-config.js) -->
+  <script src="firebase-config.js" onerror="window.__FIREBASE_CONFIG_LOAD_FAILED__=true;"></script>
+  <script>
+    if (window.__FIREBASE_CONFIG_LOAD_FAILED__) {
+      alert(
+        "Falta firebase-config.js (no se pudo cargar).\n\n" +
+        "Crea/asegura el archivo en la carpeta /frontend/ con:\n" +
+        "window.FIREBASE_CONFIG = {...} y window.APPS_SCRIPT_URL = '...';\n\n" +
+        "Luego haz commit/push y recarga (Ctrl+F5)."
+      );
+    }
+  </script>
 </head>
+
 <body>
   <!-- Header + Nav -->
   <header class="site-header">
@@ -226,6 +238,7 @@
     </div>
   </footer>
 
+  <!-- Tu JS principal (debe ir después de firebase-config.js) -->
   <script src="script.js"></script>
 </body>
 </html>

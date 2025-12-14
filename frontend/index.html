@@ -1,0 +1,238 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dely Plott Express — Ploteos y Doblados</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <!-- Poppins para texto -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Oxanium para look “tech/cyber” -->
+    <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <!-- Header + Nav -->
+    <header class="site-header">
+        <div class="wrap">
+            <div class="topbar">
+                <div class="brand">
+                    <div class="logo-circle" aria-hidden="true">🖨️</div>
+                    <div class="brand-text">
+                        <h1>DELYPLOTT <span>EXPRESS</span></h1>
+                        <p class="tag">Ploteos y doblados · distintos tamaños/formatos</p>
+                        <p class="tag small">Planos, pendones, docs e infografías · Atención 24/7</p>
+                    </div>
+                </div>
+
+                <nav class="nav" aria-label="Navegación principal">
+                    <a class="link" href="#order-card">Inicio</a>
+                    <a class="link" href="#como-funciona">Cómo funciona</a>
+                    <a class="link" href="#sobre-nosotros">Sobre nosotros</a>
+                    <a class="link" href="#contacto">Contacto</a>
+
+                    <!-- Toggle de tema -->
+                    <button class="link theme-toggle" id="theme-toggle" type="button"
+                            aria-label="Cambiar tema" title="Cambiar tema">
+                        🌙
+                    </button>
+
+                    <!-- Toggle de paleta -->
+                    <button class="link palette-toggle" id="palette-toggle" type="button"
+                            aria-label="Cambiar paleta" title="Cambiar paleta">
+                        🎨
+                    </button>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <!-- ===== FORMULARIO ===== -->
+        <section id="order-card" class="card">
+            <h2>Haz tu pedido</h2>
+
+            <form id="order-form" novalidate>
+                <div class="grid">
+                    <label class="field">
+                        <span>Nombre y apellido</span>
+                        <input type="text" name="nombre" placeholder="Tu nombre" required />
+                    </label>
+
+                    <label class="field">
+                        <span>Teléfono</span>
+                        <input type="tel" name="telefono" placeholder="+56 9 ..." required />
+                    </label>
+
+                    <label class="field">
+                        <span>Email</span>
+                        <input type="email" name="email" placeholder="tu@email.com" required />
+                    </label>
+
+                    <label class="field">
+                        <span>Tamaño aprox.</span>
+                        <select name="tamano">
+                            <option value="A4">A4</option>
+                            <option value="A3">A3</option>
+                            <option value="A2">A2</option>
+                            <option value="A1">A1</option>
+                            <option value="A0">A0</option>
+                            <option value="Otro">Otro / lo indico en notas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Color</span>
+                        <select name="color">
+                            <option>Blanco y negro</option>
+                            <option>Color</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Entrega</span>
+                        <select name="entrega">
+                            <option>Retiro en local</option>
+                            <option>Delivery</option>
+                        </select>
+                    </label>
+                </div>
+
+                <label class="field">
+                    <span>Notas</span>
+                    <textarea name="notas" rows="3" placeholder="Indícanos detalles de ploteo/doblado, dirección si es delivery, etc."></textarea>
+                </label>
+
+                <!-- Subida de archivos -->
+                <div class="uploader">
+                    <label for="file-input" class="dropzone" id="dropzone">
+                        <input id="file-input" type="file" name="archivos" multiple accept="*/*" hidden>
+                        <div class="dz-inner">
+                            <svg width="36" height="36" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v4h16v-4"
+                                      fill="none" stroke="currentColor" stroke-width="1.6"
+                                      stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                            <p><strong>Suelta tus archivos aquí</strong> o <u>explora</u></p>
+                            <small>PDF, DWG, JPG, PNG, DOCX, etc. — hasta 500&nbsp;MB por archivo</small>
+                        </div>
+                    </label>
+
+                    <ul id="file-list" class="file-list" aria-live="polite"></ul>
+                </div>
+
+                <label class="check">
+                    <input type="checkbox" id="tyc" required>
+                    <span>Confirmo que el envío es una <b>simulación</b> (verás los datos de pago al finalizar). Para carga real, conectar con tu backend.</span>
+                </label>
+
+                <div class="actions">
+                    <button type="submit" class="btn primary">Enviar pedido</button>
+                    <span id="form-status" class="status" role="status" aria-live="polite"></span>
+                </div>
+            </form>
+        </section>
+
+        <!-- ===== PAGO / CONFIRMACIÓN ===== -->
+        <section id="payment-card" class="card payment hidden" aria-hidden="true">
+            <div class="checkmark" aria-hidden="true">✓</div>
+            <h2>¡Pedido recibido!</h2>
+            <p>Te dejamos los datos para transferir. También te escribiremos por WhatsApp/Email para confirmar tu pedido.</p>
+
+            <div class="payment-grid">
+                <div class="box">
+                    <h3>Datos de transferencia</h3>
+                    <dl id="bank-data" class="dl"></dl>
+                    <button id="copy-btn" class="btn ghost" type="button">Copiar datos</button>
+                </div>
+                <div class="box">
+                    <h3>Resumen del pedido</h3>
+                    <ul id="summary" class="summary"></ul>
+                </div>
+            </div>
+
+            <div class="after-actions">
+                <a class="btn primary" href="https://wa.me/56912345678" target="_blank" rel="noopener">Avisar por WhatsApp</a>
+                <button id="new-order" class="btn" type="button">Cargar otro pedido</button>
+            </div>
+
+            <p class="tiny">Una vez acreditado el pago, procedemos al ploteo. Horario extendido 24/7.</p>
+        </section>
+
+        <!-- ===== CÓMO FUNCIONA ===== -->
+        <section id="como-funciona" class="card">
+            <h2>Cómo funciona</h2>
+            <ol class="steps">
+                <li><b>Sube tus archivos</b> (PDF, DWG, JPG/PNG, DOCX… hasta 500&nbsp;MB c/u).</li>
+                <li><b>Completa tus datos</b> y elige tamaño, color y entrega.</li>
+                <li><b>Confirma por transferencia</b> y ¡lo ploteamos! Te avisamos al estar listo.</li>
+            </ol>
+            <p class="tiny">¿Necesitas revisión previa, escalas exactas o tiradas múltiples? Indícalo en “Notas”.</p>
+        </section>
+
+        <!-- ===== SOBRE NOSOTROS ===== -->
+        <section id="sobre-nosotros" class="card">
+            <h2>Sobre nosotros</h2>
+            <p>
+                Somos <b>Delyplott Express</b>, un local <b>fijo y presencial</b> dedicado a ploteos y doblados
+                con atención rápida y flexible. Trabajamos para estudiantes, oficinas técnicas y empresas
+                que necesitan material listo para entregar.
+            </p>
+            <div class="about-grid">
+                <div class="box">
+                    <dl class="dl">
+                        <dt>Dirección</dt>
+                        <dd>Av. Ejemplo 1234, Santiago</dd>
+                        <dt>Horario</dt>
+                        <dd>Lun–Dom 24/7 (coordinación previa por WhatsApp)</dd>
+                        <dt>Servicios</dt>
+                        <dd>Ploteo B/N y color, doblado de planos, pendones, afiches, anillados</dd>
+                        <dt>Formas de pago</dt>
+                        <dd>Transferencia bancaria y efectivo</dd>
+                    </dl>
+                </div>
+                <div class="box">
+                    <p class="muted">Si requieres factura, incluye razón social y datos tributarios en “Notas”.</p>
+                    <ul class="summary">
+                        <li><span>Entrega</span><span>Retiro en local o delivery</span></li>
+                        <li><span>Urgencias</span><span>Respondemos 24/7</span></li>
+                        <li><span>Revisiones</span><span>Escalas y espesores a pedido</span></li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== CONTACTO ===== -->
+        <section id="contacto" class="card">
+            <h2>Contacto</h2>
+            <div class="contact-grid">
+                <div class="box">
+                    <p><b>WhatsApp:</b> <a href="https://wa.me/56912345678" target="_blank" rel="noopener">+56 9 123 45 678</a></p>
+                    <p><b>Email:</b> <a href="mailto:pedidos@delyplott.com">pedidos@delyplott.com</a></p>
+                    <p class="tiny">Envíanos dudas o archivos directo por WhatsApp si prefieres.</p>
+                </div>
+                <div class="box">
+                    <div class="map">
+                        <iframe title="Mapa del local"
+                                src="https://maps.google.com/maps?q=Santiago%20Chile&t=&z=14&ie=UTF8&iwloc=&output=embed"
+                                loading="lazy"
+                                referrerpolicy="no-referrer-when-downgrade"></iframe>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="wrap">
+            <p>© <span id="year"></span> Delyplott Express · <a href="mailto:pedidos@delyplott.com">pedidos@delyplott.com</a> · <a href="tel:+569112345678">+56 9 123 45 678</a></p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

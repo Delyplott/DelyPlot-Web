@@ -1,0 +1,30 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+
+# VS / VSCode
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+
+# Secrets
+.env
+backend/serviceAccountKey.json
+frontend/firebase-config.js
+
+# Wheelhouse
+backend/wheelhouse/

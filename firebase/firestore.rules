@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner() { return signedIn() && resource.data.uid == request.auth.uid; }
+    function isNewOwner() { return signedIn() && request.resource.data.uid == request.auth.uid; }
+
+    function noServerFields() {
+      return !('analysis' in request.resource.data)
+          && !('quote' in request.resource.data)
+          && !('preview' in request.resource.data)
+          && !('worker' in request.resource.data)
+          && !('error' in request.resource.data);
+    }
+
+    function onlyClientEditableFields() {
+      // Campos que el cliente puede cambiar mientras status == uploaded
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        'customer', 'notes', 'options', 'file', 'files', 'updatedAt'
+      ]);
+    }
+
+    match /orders/{orderId} {
+
+      allow create: if isNewOwner()
+        && request.resource.data.status == 'uploaded'
+        && noServerFields();
+
+      allow read: if isOwner();
+
+      allow update: if isOwner()
+        && resource.data.status == 'uploaded'
+        && request.resource.data.status == 'uploaded'
+        && noServerFields()
+        && onlyClientEditableFields();
+
+      allow delete: if false;
+    }
+  }
+}

@@ -3,7 +3,7 @@ const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
 
 const formatBytes = (bytes) => {
-  if (bytes === 0) return "0 B";
+  if (!bytes || bytes === 0) return "0 B";
   const k = 1024, sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
@@ -32,7 +32,7 @@ const yearEl = $("#year");
 if (yearEl) yearEl.textContent = new Date().getFullYear();
 
 // ————————————————————————————————————————————————
-//  Tema (claro / oscuro) + Paletas (igual que tu base)
+//  Tema (claro / oscuro) + Paletas
 // ————————————————————————————————————————————————
 const root = document.documentElement;
 const THEME_KEY = "dely_theme";
@@ -80,7 +80,9 @@ function nextPalette() {
   localStorage.setItem(PALETTE_KEY, next);
   applyPalette(next);
 }
+
 initTheme(); initPalette();
+
 if (themeBtn) themeBtn.addEventListener("click", () => {
   const current = root.dataset.theme === "dark" ? "dark" : "light";
   const next = current === "dark" ? "light" : "dark";
@@ -88,7 +90,9 @@ if (themeBtn) themeBtn.addEventListener("click", () => {
   applyTheme(next);
 });
 if (paletteBtn) paletteBtn.addEventListener("click", nextPalette);
-window.addEventListener("keydown", (e) => { if (e.shiftKey && (e.key === "P" || e.key === "p")) nextPalette(); });
+window.addEventListener("keydown", (e) => {
+  if (e.shiftKey && (e.key === "P" || e.key === "p")) nextPalette();
+});
 
 // ————————————————————————————————————————————————
 //  Firebase init (Compat)
@@ -110,8 +114,7 @@ async function ensureAnonAuth() {
 // ————————————————————————————————————————————————
 //  Drive Uploader (Apps Script UI - SIN CORS)
 // ————————————————————————————————————————————————
-const APPS_SCRIPT_URL = window.APPS_SCRIPT_URL;             // Debe ser la URL .../exec del Web App
-const SETTINGS = window.DELY_SETTINGS || { MAX_FILE_MB: 20 };
+const APPS_SCRIPT_URL = window.APPS_SCRIPT_URL; // URL .../exec del Web App
 
 function buildUploaderUrl(orderId) {
   if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL en firebase-config.js");
@@ -184,7 +187,8 @@ function waitUploaderResult(orderId, popupWindow) {
 }
 
 // ————————————————————————————————————————————————
-//  Manejo de archivos (dropzone + lista)  [solo UI/summary]
+//  (Opcional) Manejo de archivos local (si aún existe UI vieja)
+//  En el index nuevo NO se seleccionan archivos aquí.
 // ————————————————————————————————————————————————
 const input = $("#file-input");
 const dropzone = $("#dropzone");
@@ -213,17 +217,9 @@ function renderFiles() {
 }
 
 function addFiles(list) {
-  const MAX = (SETTINGS.MAX_FILE_MB || 20) * 1024 * 1024;
-  const tooBig = [];
-
-  for (const f of list) {
-    if (f.size > MAX) { tooBig.push(f.name); continue; }
-    filesState.push(f);
-  }
+  const arr = Array.from(list || []);
+  for (const f of arr) filesState.push(f);
   renderFiles();
-  if (tooBig.length) {
-    alert(`Se omitieron por exceder ${SETTINGS.MAX_FILE_MB} MB:\n• ` + tooBig.join("\n• "));
-  }
 }
 
 if (input && dropzone) {
@@ -287,7 +283,11 @@ function renderBankData() {
   });
 }
 
-function renderSummary(formData) {
+/**
+ * filesArr: array de objetos { filename, ... } (por ejemplo los que vienen del uploader / Firestore)
+ * Si no se pasa, usa el estado local (si existiera UI vieja).
+ */
+function renderSummary(formData, filesArr = null) {
   if (!summary) return;
   summary.innerHTML = "";
 
@@ -307,8 +307,13 @@ function renderSummary(formData) {
     summary.appendChild(li);
   }
 
+  const list = Array.isArray(filesArr)
+    ? filesArr
+    : (Array.isArray(filesState) ? filesState.map(f => ({ filename: f?.name })) : []);
+
+  const names = list.map(x => x?.filename).filter(Boolean);
   const filesLi = document.createElement("li");
-  filesLi.innerHTML = `<span><b>Archivos (${filesState.length})</b></span><span>${filesState.map(f => f.name).join(", ")}</span>`;
+  filesLi.innerHTML = `<span><b>Archivos (${names.length})</b></span><span>${names.length ? names.join(", ") : "—"}</span>`;
   summary.appendChild(filesLi);
 }
 
@@ -338,7 +343,8 @@ function renderQuote(quote) {
 }
 
 // ————————————————————————————————————————————————
-//  Envío: crear pedido + subir a Drive (popup) + escuchar Firestore
+//  Envío: crear pedido (DESPUÉS del upload) + escuchar Firestore
+//  (para que el usuario NO seleccione archivos en el index)
 // ————————————————————————————————————————————————
 let unsubscribeOrder = null;
 
@@ -347,7 +353,6 @@ if (form) {
     e.preventDefault();
     if (!form.reportValidity()) return;
 
-    if (!filesState.length) { alert("Adjunta al menos un archivo."); return; }
     const tyc = $("#tyc");
     if (tyc && !tyc.checked) { alert("Acepta la casilla para continuar."); return; }
 
@@ -360,12 +365,44 @@ if (form) {
 
       const fd = new FormData(form);
       renderBankData();
-      renderSummary(fd);
+      renderSummary(fd, []);
 
-      // 1) Crear pedido en Firestore
-      if (statusEl) statusEl.textContent = "Creando pedido…";
+      // 1) Reservar ID (sin crear aún el doc) y abrir uploader
+      const docRef = db.collection("orders").doc();
+      const orderId = docRef.id;
 
-      const primary = filesState[0];
+      // UI transición
+      if (orderCard) orderCard.classList.add("hidden");
+      if (quoteCard) {
+        quoteCard.classList.remove("hidden");
+        quoteCard.setAttribute("aria-hidden", "false");
+      }
+      setUIOrderStatus(orderId, "awaiting_upload", "Se abrirá una ventana para subir archivos a Drive…");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+
+      if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
+      const popup = openUploader(orderId);
+
+      if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
+      setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
+
+      const uploaded = await waitUploaderResult(orderId, popup);
+      if (!uploaded.length) throw new Error("No se subió ningún archivo en el uploader.");
+
+      // 2) Normalizar archivos recibidos desde el uploader
+      const normalizedFiles = uploaded.map(u => ({
+        provider: "drive",
+        driveFileId: u.fileId,
+        filename: u.filename,
+        contentType: u.contentType || "application/octet-stream",
+        size: (u.size ?? null)
+      }));
+
+      const first = normalizedFiles[0];
+
+      // 3) Crear pedido en Firestore (ahora sí, con Drive IDs listos)
+      if (statusEl) statusEl.textContent = "Guardando pedido…";
+
       const orderPayload = {
         uid: user.uid,
         status: "uploaded",
@@ -384,80 +421,21 @@ if (form) {
         notes: String(fd.get("notas") || ""),
         file: {
           provider: "drive",
-          driveFileId: null,
-          filename: primary.name,
-          contentType: primary.type || "application/octet-stream",
-          size: primary.size
-        },
-        files: filesState.map(f => ({
-          provider: "drive",
-          driveFileId: null,
-          filename: f.name,
-          contentType: f.type || "application/octet-stream",
-          size: f.size
-        }))
-      };
-
-      const docRef = await db.collection("orders").add(orderPayload);
-      const orderId = docRef.id;
-
-      // UI transición
-      if (orderCard) orderCard.classList.add("hidden");
-      if (quoteCard) {
-        quoteCard.classList.remove("hidden");
-        quoteCard.setAttribute("aria-hidden", "false");
-      }
-
-      setUIOrderStatus(orderId, "uploaded", "Se abrirá una ventana para subir archivos a Drive…");
-      window.scrollTo({ top: 0, behavior: "smooth" });
-
-      // 2) Subir a Drive SIN CORS: abrir uploader (Apps Script UI)
-      if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
-
-      const popup = openUploader(orderId);
-
-      if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
-      setUIOrderStatus(orderId, "uploaded", "En la ventana emergente, seleccione los mismos archivos y presione “Subir”.");
-
-      const uploaded = await waitUploaderResult(orderId, popup);
-
-      if (!uploaded.length) {
-        throw new Error("No se subió ningún archivo en el uploader.");
-      }
-
-      // Construir patch para Firestore
-      // Preferimos metadatos locales si coinciden por nombre
-      const selectedByName = new Map(filesState.map(f => [f.name, f]));
-      const normalizedFiles = uploaded.map(u => {
-        const sel = selectedByName.get(u.filename);
-        return {
-          provider: "drive",
-          driveFileId: u.fileId,
-          filename: u.filename,
-          contentType: sel?.type || u.contentType || "application/octet-stream",
-          size: sel?.size ?? u.size ?? null
-        };
-      });
-
-      const first = normalizedFiles[0];
-
-      if (statusEl) statusEl.textContent = "Actualizando pedido…";
-      await docRef.update({
-        files: normalizedFiles,
-        file: {
-          provider: "drive",
           driveFileId: first.driveFileId,
           filename: first.filename,
           contentType: first.contentType,
           size: first.size
         },
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+        files: normalizedFiles
+      };
 
+      await docRef.set(orderPayload);
+
+      renderSummary(fd, normalizedFiles);
       setUIOrderStatus(orderId, "uploaded", "Archivo subido. En espera de cotización…");
       if (statusEl) statusEl.textContent = "";
 
-      // 3) Escuchar el pedido en tiempo real
+      // 4) Escuchar el pedido en tiempo real
       if (unsubscribeOrder) unsubscribeOrder();
       unsubscribeOrder = docRef.onSnapshot((snap) => {
         if (!snap.exists) return;
@@ -481,9 +459,7 @@ if (form) {
 
         // Quote oficial
         const q = data.quote;
-        if (q && q.total_clp != null) {
-          renderQuote(q);
-        }
+        if (q && q.total_clp != null) renderQuote(q);
 
         // Error
         if (st === "error" && data.error && data.error.message) {
@@ -494,8 +470,10 @@ if (form) {
     } catch (err) {
       console.error(err);
       alert("No se pudo enviar el pedido: " + (err?.message || String(err)));
+
       if (orderCard) orderCard.classList.remove("hidden");
       if (quoteCard) quoteCard.classList.add("hidden");
+      if (statusEl) statusEl.textContent = "";
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -540,6 +518,7 @@ if (newOrderBtn) {
     if (orderCard) orderCard.classList.remove("hidden");
     if (form) form.reset();
 
+    // Si existiera UI vieja de archivos, limpiar
     filesState = [];
     renderFiles();
 
@@ -550,10 +529,11 @@ if (newOrderBtn) {
     if (quoteBreakdown) quoteBreakdown.innerHTML = "";
     if (quoteTotal) quoteTotal.textContent = "—";
     if (quoteFormula) quoteFormula.textContent = "";
+    if (statusEl) statusEl.textContent = "";
   });
 }
 
-// Navegación activa por ancla (tu base)
+// Navegación activa por ancla
 const links = $$(".nav .link").filter(a => {
   const href = a.getAttribute("href");
   return href && href.startsWith("#");

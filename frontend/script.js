@@ -1,3 +1,10 @@
+// =========================================================
+// DelyPlott — script.js (completo)
+// Cambios incluidos:
+// 1) Nueva paleta "neutral" (oscuro moderno sobrio)
+// 2) Paleta por defecto: "neutral" (en vez de "neon")
+// =========================================================
+
 // ——— Utilidades ———
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
@@ -41,7 +48,9 @@ const PALETTE_KEY = "dely_palette";
 const themeBtn = $("#theme-toggle");
 const paletteBtn = $("#palette-toggle");
 
+// ✅ "neutral" agregado y puesto al inicio
 const palettes = [
+  "neutral",
   "neon", "arasaka", "mox", "netwatch", "sandevistan",
   "kusanagi", "nightcity", "afterlife", "trauma", "delamain",
   "monowire", "chromatic", "tokyo", "acidrain", "ghostnet"
@@ -56,11 +65,13 @@ function applyTheme(theme) {
     themeBtn.setAttribute("title", isDark ? "Cambiar a modo claro" : "Cambiar a modo oscuro");
   }
 }
+
 function initTheme() {
   const saved = localStorage.getItem(THEME_KEY);
   if (saved === "light" || saved === "dark") return applyTheme(saved);
-  applyTheme("dark");
+  applyTheme("dark"); // default
 }
+
 function applyPalette(palette) {
   root.dataset.palette = palette;
   if (paletteBtn) {
@@ -68,20 +79,24 @@ function applyPalette(palette) {
     paletteBtn.setAttribute("aria-label", `Cambiar paleta (actual: ${palette})`);
   }
 }
+
 function initPalette() {
   const saved = localStorage.getItem(PALETTE_KEY);
-  const p = palettes.includes(saved) ? saved : "neon";
+  // ✅ default "neutral" (oscuro moderno sobrio)
+  const p = palettes.includes(saved) ? saved : "neutral";
   applyPalette(p);
 }
+
 function nextPalette() {
-  const current = root.dataset.palette || "neon";
+  const current = root.dataset.palette || "neutral";
   const idx = palettes.indexOf(current);
   const next = palettes[(idx + 1) % palettes.length];
   localStorage.setItem(PALETTE_KEY, next);
   applyPalette(next);
 }
 
-initTheme(); initPalette();
+initTheme();
+initPalette();
 
 if (themeBtn) themeBtn.addEventListener("click", () => {
   const current = root.dataset.theme === "dark" ? "dark" : "light";
@@ -89,7 +104,9 @@ if (themeBtn) themeBtn.addEventListener("click", () => {
   localStorage.setItem(THEME_KEY, next);
   applyTheme(next);
 });
+
 if (paletteBtn) paletteBtn.addEventListener("click", nextPalette);
+
 window.addEventListener("keydown", (e) => {
   if (e.shiftKey && (e.key === "P" || e.key === "p")) nextPalette();
 });
@@ -187,7 +204,7 @@ function waitUploaderResult(orderId, popupWindow) {
 }
 
 // ————————————————————————————————————————————————
-//  (Opcional) Manejo de archivos local (si aún existe UI vieja)
+//  (Opcional) Manejo de archivos local (si existiera UI vieja)
 //  En el index nuevo NO se seleccionan archivos aquí.
 // ————————————————————————————————————————————————
 const input = $("#file-input");

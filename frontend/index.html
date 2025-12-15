@@ -116,22 +116,12 @@
           <textarea name="notas" rows="3" placeholder="Indícanos detalles de ploteo/doblado, dirección si es delivery, etc."></textarea>
         </label>
 
-        <!-- Subida de archivos -->
-        <div class="uploader">
-          <label for="file-input" class="dropzone" id="dropzone">
-            <input id="file-input" type="file" name="archivos" multiple accept="application/pdf,image/*" hidden>
-            <div class="dz-inner">
-              <svg width="36" height="36" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v4h16v-4"
-                      fill="none" stroke="currentColor" stroke-width="1.6"
-                      stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-              <p><strong>Suelta tus archivos aquí</strong> o <u>explora</u></p>
-              <small>PDF/JPG/PNG — límite práctico Apps Script: ~20&nbsp;MB por archivo</small>
-            </div>
-          </label>
-
-          <ul id="file-list" class="file-list" aria-live="polite"></ul>
+        <!-- ✅ Archivos: ahora se suben en la ventana emergente -->
+        <div class="box" style="margin-top:14px;">
+          <p style="margin:0;"><b>Archivos:</b> se cargarán en una <b>ventana emergente</b> después de presionar <b>“Enviar pedido”</b>.</p>
+          <p class="tiny" style="margin:8px 0 0;">
+            Si no se abre la ventana, habilita <b>pop-ups</b> para este sitio. Formatos: PDF / imágenes. Límite práctico Apps Script: ~45&nbsp;MB por archivo.
+          </p>
         </div>
 
         <label class="check">
@@ -198,9 +188,9 @@
     <section id="como-funciona" class="card">
       <h2>Cómo funciona</h2>
       <ol class="steps">
-        <li><b>Sube tu archivo</b> (PDF o imagen).</li>
-        <li><b>Se analiza</b> cobertura y metadatos en backend.</li>
-        <li><b>Recibes</b> preview y desglose oficial de la cotización.</li>
+        <li><b>Completa el formulario</b> y presiona “Enviar pedido”.</li>
+        <li><b>Se abre una ventana</b> para subir tu archivo a Drive.</li>
+        <li><b>Se analiza</b> y recibes preview + desglose oficial de la cotización.</li>
       </ol>
       <p class="tiny">Para archivos muy grandes, ver recomendaciones al final del README.</p>
     </section>

@@ -1,0 +1,42 @@
+name: delyplott-worker-dispatch
+
+on:
+  repository_dispatch:
+    types: [run-worker]
+  workflow_dispatch:
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Firebase credentials
+        working-directory: backend
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT_JSON" > firebase_sa.json
+
+      - name: Run worker (one pass)
+        working-directory: backend
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/backend/firebase_sa.json
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          RUN_ONCE: "1"
+          ORDER_ID: ${{ github.event.client_payload.orderId }}
+        run: |
+          python worker.py

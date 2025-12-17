@@ -3,6 +3,8 @@
 // Cambios incluidos:
 // 1) Nueva paleta "neutral" (oscuro moderno sobrio)
 // 2) Paleta por defecto: "neutral" (en vez de "neon")
+// 3) ✅ Handshake postMessage: GitHub -> Apps Script popup ("order_saved")
+//    para disparar GitHub Actions vía Apps Script (dispatchWorker) sin race
 // =========================================================
 
 // ——— Utilidades ———
@@ -376,6 +378,10 @@ if (form) {
     const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
 
+    // ✅ Mantener referencia del popup y su origin para handshake
+    let popup = null;
+    let popupOrigin = null;
+
     try {
       if (statusEl) statusEl.textContent = "Autenticando…";
       const user = await ensureAnonAuth();
@@ -398,7 +404,14 @@ if (form) {
       window.scrollTo({ top: 0, behavior: "smooth" });
 
       if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
-      const popup = openUploader(orderId);
+      popup = openUploader(orderId);
+
+      // Origin del popup (Apps Script)
+      try {
+        popupOrigin = new URL(APPS_SCRIPT_URL).origin; // normalmente https://script.google.com
+      } catch {
+        popupOrigin = null;
+      }
 
       if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
       setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
@@ -447,6 +460,17 @@ if (form) {
       };
 
       await docRef.set(orderPayload);
+
+      // ✅ Handshake: avisar al popup que el pedido ya existe en Firestore
+      // para que Apps Script dispare dispatchWorker(orderId) sin race condition.
+      if (popup && !popup.closed && popupOrigin) {
+        try {
+          popup.postMessage({ type: "order_saved", orderId }, popupOrigin);
+        } catch (e) {
+          // No es fatal: si falla, igual el usuario podrá cotizar si luego disparan manualmente
+          console.warn("No se pudo enviar order_saved al uploader:", e);
+        }
+      }
 
       renderSummary(fd, normalizedFiles);
       setUIOrderStatus(orderId, "uploaded", "Archivo subido. En espera de cotización…");

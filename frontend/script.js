@@ -5,6 +5,9 @@
 // 2) Paleta por defecto: "neutral" (en vez de "neon")
 // 3) ✅ Handshake postMessage: GitHub -> Apps Script popup ("order_saved")
 //    para disparar GitHub Actions vía Apps Script (dispatchWorker) sin race
+// 4) ✅ window.open sin perder opener (noopener=no) para evitar "No hay opener"
+// 5) ✅ postMessage a popup con targetOrigin="*" (porque Apps Script a veces usa
+//    script.google.com o script.googleusercontent.com como origin)
 // =========================================================
 
 // ——— Utilidades ———
@@ -150,7 +153,11 @@ function buildUploaderUrl(orderId) {
 
 function openUploader(orderId) {
   const url = buildUploaderUrl(orderId);
-  const w = window.open(url, "dely_uploader", "width=560,height=760");
+
+  // ✅ Importante: evitar que el navegador quite window.opener
+  // (muchos navegadores aplican noopener por seguridad en algunos casos)
+  const w = window.open(url, "dely_uploader", "width=560,height=760,noopener=no");
+
   if (!w) throw new Error("Popup bloqueado. Habilite ventanas emergentes para continuar.");
   return w;
 }
@@ -363,7 +370,6 @@ function renderQuote(quote) {
 
 // ————————————————————————————————————————————————
 //  Envío: crear pedido (DESPUÉS del upload) + escuchar Firestore
-//  (para que el usuario NO seleccione archivos en el index)
 // ————————————————————————————————————————————————
 let unsubscribeOrder = null;
 
@@ -378,9 +384,8 @@ if (form) {
     const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
 
-    // ✅ Mantener referencia del popup y su origin para handshake
+    // ✅ Mantener referencia del popup para handshake
     let popup = null;
-    let popupOrigin = null;
 
     try {
       if (statusEl) statusEl.textContent = "Autenticando…";
@@ -390,7 +395,7 @@ if (form) {
       renderBankData();
       renderSummary(fd, []);
 
-      // 1) Reservar ID (sin crear aún el doc) y abrir uploader
+      // 1) Reservar ID y abrir uploader
       const docRef = db.collection("orders").doc();
       const orderId = docRef.id;
 
@@ -406,20 +411,13 @@ if (form) {
       if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
       popup = openUploader(orderId);
 
-      // Origin del popup (Apps Script)
-      try {
-        popupOrigin = new URL(APPS_SCRIPT_URL).origin; // normalmente https://script.google.com
-      } catch {
-        popupOrigin = null;
-      }
-
       if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
       setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
 
       const uploaded = await waitUploaderResult(orderId, popup);
       if (!uploaded.length) throw new Error("No se subió ningún archivo en el uploader.");
 
-      // 2) Normalizar archivos recibidos desde el uploader
+      // 2) Normalizar archivos
       const normalizedFiles = uploaded.map(u => ({
         provider: "drive",
         driveFileId: u.fileId,
@@ -430,7 +428,7 @@ if (form) {
 
       const first = normalizedFiles[0];
 
-      // 3) Crear pedido en Firestore (ahora sí, con Drive IDs listos)
+      // 3) Crear pedido en Firestore
       if (statusEl) statusEl.textContent = "Guardando pedido…";
 
       const orderPayload = {
@@ -461,13 +459,12 @@ if (form) {
 
       await docRef.set(orderPayload);
 
-      // ✅ Handshake: avisar al popup que el pedido ya existe en Firestore
-      // para que Apps Script dispare dispatchWorker(orderId) sin race condition.
-      if (popup && !popup.closed && popupOrigin) {
+      // ✅ Handshake: avisar al popup que ya existe el doc en Firestore
+      // targetOrigin="*" porque Apps Script a veces cambia el origin real
+      if (popup && !popup.closed) {
         try {
-          popup.postMessage({ type: "order_saved", orderId }, popupOrigin);
+          popup.postMessage({ type: "order_saved", orderId }, "*");
         } catch (e) {
-          // No es fatal: si falla, igual el usuario podrá cotizar si luego disparan manualmente
           console.warn("No se pudo enviar order_saved al uploader:", e);
         }
       }

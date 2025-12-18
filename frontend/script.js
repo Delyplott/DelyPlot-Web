@@ -3,12 +3,9 @@
 // Cambios incluidos:
 // 1) Nueva paleta "neutral" (oscuro moderno sobrio)
 // 2) Paleta por defecto: "neutral" (en vez de "neon")
-// 3) ✅ Handshake postMessage: GitHub -> Apps Script popup ("uploader_init" / "uploader_ready")
-//    para evitar que el popup no tenga opener (COOP) y aun así devuelva IDs.
-// 4) ✅ Handshake "order_saved" (GitHub -> popup) para que Apps Script dispare dispatchWorker(orderId)
-//    sin race condition (primero Firestore, luego dispatch).
-// 5) ✅ Fix crítico: el popup a veces corre en https://script.googleusercontent.com,
-//    por lo que los postMessage ahora prueban ambos origins.
+// 3) ✅ Elimina dependencia de opener/postMessage (COOP)
+// 4) ✅ Polling al WebApp (ui=result) para obtener IDs subidos
+//    uploader.html guarda el resultado vía saveUploadResult(orderId, files)
 // =========================================================
 
 // ——— Utilidades ———
@@ -54,7 +51,6 @@ const PALETTE_KEY = "dely_palette";
 const themeBtn = $("#theme-toggle");
 const paletteBtn = $("#palette-toggle");
 
-// ✅ "neutral" agregado y puesto al inicio
 const palettes = [
   "neutral",
   "neon", "arasaka", "mox", "netwatch", "sandevistan",
@@ -88,7 +84,7 @@ function applyPalette(palette) {
 
 function initPalette() {
   const saved = localStorage.getItem(PALETTE_KEY);
-  const p = palettes.includes(saved) ? saved : "neutral"; // ✅ default neutral
+  const p = palettes.includes(saved) ? saved : "neutral";
   applyPalette(p);
 }
 
@@ -158,56 +154,74 @@ function openUploader(orderId) {
   return w;
 }
 
+// ✅ Polling al WebApp: ?ui=result&orderId=...
+function buildResultUrl(orderId) {
+  if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL en firebase-config.js");
+  const u = new URL(APPS_SCRIPT_URL);
+  u.searchParams.set("ui", "result");
+  u.searchParams.set("orderId", String(orderId || ""));
+  return u.toString();
+}
+
 /**
- * ✅ Espera el postMessage desde Apps Script:
- * { type:"drive_upload_done", orderId, files:[{filename,fileId,contentType,size}] }
+ * Espera el resultado subido consultando al WebApp (sin postMessage).
+ * Requiere que Apps Script doGet(ui=result) retorne JSON:
+ * - { ok:true, ready:false } mientras no exista
+ * - { ok:true, ready:true, files:[{filename,fileId,contentType,size}...] } cuando esté listo
  */
-function waitUploaderResult(orderId, popupWindow) {
-  return new Promise((resolve, reject) => {
-    const TIMEOUT_MS = 10 * 60 * 1000; // 10 min
-    let done = false;
+async function waitUploaderResultByPolling(orderId, popupWindow) {
+  const TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+  const START = Date.now();
+  const url = buildResultUrl(orderId);
 
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("Tiempo de espera agotado. No llegó respuesta del uploader."));
-    }, TIMEOUT_MS);
+  // Para evitar cache raro
+  const withNoCache = (base) => {
+    const u = new URL(base);
+    u.searchParams.set("_ts", String(Date.now()));
+    return u.toString();
+  };
 
-    const poll = setInterval(() => {
-      if (done) return;
-      if (popupWindow && popupWindow.closed) {
-        cleanup();
-        reject(new Error("El uploader se cerró antes de terminar la subida."));
+  // backoff suave
+  let delay = 600;
+
+  while (true) {
+    // si cerró antes de tiempo, igual podemos seguir unos segundos, pero normalmente es error
+    if (popupWindow && popupWindow.closed) {
+      // si cerró, no abortamos de inmediato: quizás ya guardó resultado. Solo seguimos un poco.
+    }
+
+    if (Date.now() - START > TIMEOUT_MS) {
+      throw new Error("Tiempo de espera agotado. No llegó resultado del uploader (polling).");
+    }
+
+    try {
+      const res = await fetch(withNoCache(url), {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+        cache: "no-store",
+        mode: "cors"
+      });
+
+      // Si el WebApp no permite CORS, esto fallará (TypeError). En ese caso hay que ajustar doGet headers.
+      const data = await res.json();
+
+      if (data && data.ok && data.ready && Array.isArray(data.files) && data.files.length) {
+        return data.files;
       }
-    }, 500);
-
-    function onMsg(ev) {
-      const okOrigin =
-        ev.origin === "https://script.google.com" ||
-        ev.origin === "https://script.googleusercontent.com";
-
-      if (!okOrigin) return;
-
-      const msg = ev.data || {};
-      if (msg.type !== "drive_upload_done") return;
-      if (String(msg.orderId || "") !== String(orderId || "")) return;
-
-      done = true;
-      cleanup();
-      resolve(Array.isArray(msg.files) ? msg.files : []);
+      // si no está listo, seguimos esperando
+    } catch (e) {
+      // Si hubo error de red/CORS, reintentamos con delay creciente
+      // (igual te va a quedar el error en consola para diagnosticar)
+      console.warn("Polling error:", e);
     }
 
-    function cleanup() {
-      clearTimeout(timer);
-      clearInterval(poll);
-      window.removeEventListener("message", onMsg);
-    }
-
-    window.addEventListener("message", onMsg);
-  });
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(2000, Math.floor(delay * 1.15));
+  }
 }
 
 // ————————————————————————————————————————————————
-//  (Opcional) Manejo de archivos local (si existiera UI vieja)
+//  (Opcional) UI vieja de archivos local (si existiera)
 // ————————————————————————————————————————————————
 const input = $("#file-input");
 const dropzone = $("#dropzone");
@@ -374,13 +388,6 @@ if (form) {
 
     let popup = null;
 
-    // ✅ handshake state
-    let uploaderReady = false;
-    let stopInit = null;
-
-    // listener "uploader_ready"
-    let onReady = null;
-
     try {
       if (statusEl) statusEl.textContent = "Autenticando…";
       const user = await ensureAnonAuth();
@@ -404,50 +411,14 @@ if (form) {
       if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
       popup = openUploader(orderId);
 
-      // ✅ Escuchar ACK del popup
-      onReady = (ev) => {
-        const okOrigin =
-          ev.origin === "https://script.google.com" ||
-          ev.origin === "https://script.googleusercontent.com";
-        if (!okOrigin) return;
-
-        const msg = ev.data || {};
-        if (msg.type !== "uploader_ready") return;
-        if (String(msg.orderId || "") !== String(orderId || "")) return;
-
-        uploaderReady = true;
-      };
-      window.addEventListener("message", onReady);
-
-      // ✅ Enviar uploader_init con reintentos y a ambos origins
-      const sendInit = () => {
-        if (!popup || popup.closed) return;
-        const msg = { type: "uploader_init", orderId };
-
-        // IMPORTANTÍSIMO: algunos WebApps renderizan en googleusercontent
-        try { popup.postMessage(msg, "https://script.google.com"); } catch {}
-        try { popup.postMessage(msg, "https://script.googleusercontent.com"); } catch {}
-        // fallback opcional (si quieres máxima tolerancia):
-        // try { popup.postMessage(msg, "*"); } catch {}
-      };
-
-      let tries = 0;
-      const maxTries = 60; // ~12s (robusto)
-      const interval = setInterval(() => {
-        tries++;
-        sendInit();
-        if (uploaderReady || tries >= maxTries) clearInterval(interval);
-      }, 200);
-
-      stopInit = () => clearInterval(interval);
-
       if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
       setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
 
-      const uploaded = await waitUploaderResult(orderId, popup);
+      // ✅ 2) Esperar resultado vía polling (NO postMessage)
+      const uploaded = await waitUploaderResultByPolling(orderId, popup);
       if (!uploaded.length) throw new Error("No se subió ningún archivo en el uploader.");
 
-      // 2) Normalizar archivos
+      // 3) Normalizar archivos
       const normalizedFiles = uploaded.map(u => ({
         provider: "drive",
         driveFileId: u.fileId,
@@ -458,7 +429,7 @@ if (form) {
 
       const first = normalizedFiles[0];
 
-      // 3) Crear pedido en Firestore
+      // 4) Crear pedido en Firestore
       if (statusEl) statusEl.textContent = "Guardando pedido…";
 
       const orderPayload = {
@@ -489,20 +460,11 @@ if (form) {
 
       await docRef.set(orderPayload);
 
-      // ✅ Avisar al popup que el pedido ya existe (para dispatchWorker sin race)
-      if (popup && !popup.closed) {
-        const msgSaved = { type: "order_saved", orderId };
-        try { popup.postMessage(msgSaved, "https://script.google.com"); } catch {}
-        try { popup.postMessage(msgSaved, "https://script.googleusercontent.com"); } catch {}
-        // fallback opcional:
-        // try { popup.postMessage(msgSaved, "*"); } catch {}
-      }
-
       renderSummary(fd, normalizedFiles);
       setUIOrderStatus(orderId, "uploaded", "Archivo subido. En espera de cotización…");
       if (statusEl) statusEl.textContent = "";
 
-      // 4) Escuchar el pedido en tiempo real
+      // 5) Escuchar el pedido en tiempo real
       if (unsubscribeOrder) unsubscribeOrder();
       unsubscribeOrder = docRef.onSnapshot((snap) => {
         if (!snap.exists) return;
@@ -539,8 +501,6 @@ if (form) {
       if (quoteCard) quoteCard.classList.add("hidden");
       if (statusEl) statusEl.textContent = "";
     } finally {
-      if (stopInit) stopInit();
-      if (onReady) window.removeEventListener("message", onReady);
       if (btn) btn.disabled = false;
     }
   });

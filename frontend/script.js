@@ -7,6 +7,8 @@
 //    para evitar que el popup no tenga opener (COOP) y aun así devuelva IDs.
 // 4) ✅ Handshake "order_saved" (GitHub -> popup) para que Apps Script dispare dispatchWorker(orderId)
 //    sin race condition (primero Firestore, luego dispatch).
+// 5) ✅ Fix crítico: el popup a veces corre en https://script.googleusercontent.com,
+//    por lo que los postMessage ahora prueban ambos origins.
 // =========================================================
 
 // ——— Utilidades ———
@@ -86,8 +88,7 @@ function applyPalette(palette) {
 
 function initPalette() {
   const saved = localStorage.getItem(PALETTE_KEY);
-  // ✅ default "neutral"
-  const p = palettes.includes(saved) ? saved : "neutral";
+  const p = palettes.includes(saved) ? saved : "neutral"; // ✅ default neutral
   applyPalette(p);
 }
 
@@ -180,8 +181,6 @@ function waitUploaderResult(orderId, popupWindow) {
     }, 500);
 
     function onMsg(ev) {
-      // Apps Script HTML suele venir desde:
-      // https://script.google.com o https://script.googleusercontent.com
       const okOrigin =
         ev.origin === "https://script.google.com" ||
         ev.origin === "https://script.googleusercontent.com";
@@ -209,7 +208,6 @@ function waitUploaderResult(orderId, popupWindow) {
 
 // ————————————————————————————————————————————————
 //  (Opcional) Manejo de archivos local (si existiera UI vieja)
-//  En el index nuevo NO se seleccionan archivos aquí.
 // ————————————————————————————————————————————————
 const input = $("#file-input");
 const dropzone = $("#dropzone");
@@ -291,7 +289,6 @@ const quoteFormula = $("#quote-formula");
 const summary = $("#summary");
 const bankData = $("#bank-data");
 
-// Renderizar datos de pago
 function renderBankData() {
   if (!bankData) return;
   bankData.innerHTML = "";
@@ -304,10 +301,6 @@ function renderBankData() {
   });
 }
 
-/**
- * filesArr: array de objetos { filename, ... } (por ejemplo los que vienen del uploader / Firestore)
- * Si no se pasa, usa el estado local (si existiera UI vieja).
- */
 function renderSummary(formData, filesArr = null) {
   if (!summary) return;
   summary.innerHTML = "";
@@ -380,11 +373,13 @@ if (form) {
     if (btn) btn.disabled = true;
 
     let popup = null;
-    let popupOrigin = null;
 
     // ✅ handshake state
     let uploaderReady = false;
     let stopInit = null;
+
+    // listener "uploader_ready"
+    let onReady = null;
 
     try {
       if (statusEl) statusEl.textContent = "Autenticando…";
@@ -398,7 +393,6 @@ if (form) {
       const docRef = db.collection("orders").doc();
       const orderId = docRef.id;
 
-      // UI transición
       if (orderCard) orderCard.classList.add("hidden");
       if (quoteCard) {
         quoteCard.classList.remove("hidden");
@@ -410,44 +404,39 @@ if (form) {
       if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
       popup = openUploader(orderId);
 
-      // Origin del popup (Apps Script)
-      try {
-        popupOrigin = new URL(APPS_SCRIPT_URL).origin; // normalmente https://script.google.com
-      } catch {
-        popupOrigin = null;
-      }
-
-      // ✅ Escuchar ACK opcional del popup
-      const onReady = (ev) => {
+      // ✅ Escuchar ACK del popup
+      onReady = (ev) => {
         const okOrigin =
           ev.origin === "https://script.google.com" ||
           ev.origin === "https://script.googleusercontent.com";
         if (!okOrigin) return;
+
         const msg = ev.data || {};
         if (msg.type !== "uploader_ready") return;
         if (String(msg.orderId || "") !== String(orderId || "")) return;
+
         uploaderReady = true;
       };
       window.addEventListener("message", onReady);
 
-      // ✅ Enviar uploader_init con reintentos (por si el popup aún está cargando)
+      // ✅ Enviar uploader_init con reintentos y a ambos origins
       const sendInit = () => {
         if (!popup || popup.closed) return;
-        try {
-          // preferimos origin exacto si lo tenemos
-          if (popupOrigin) popup.postMessage({ type: "uploader_init", orderId }, popupOrigin);
-          else popup.postMessage({ type: "uploader_init", orderId }, "*");
-        } catch {}
+        const msg = { type: "uploader_init", orderId };
+
+        // IMPORTANTÍSIMO: algunos WebApps renderizan en googleusercontent
+        try { popup.postMessage(msg, "https://script.google.com"); } catch {}
+        try { popup.postMessage(msg, "https://script.googleusercontent.com"); } catch {}
+        // fallback opcional (si quieres máxima tolerancia):
+        // try { popup.postMessage(msg, "*"); } catch {}
       };
 
       let tries = 0;
-      const maxTries = 15; // ~3s si interval 200ms
+      const maxTries = 60; // ~12s (robusto)
       const interval = setInterval(() => {
         tries++;
         sendInit();
-        if (uploaderReady || tries >= maxTries) {
-          clearInterval(interval);
-        }
+        if (uploaderReady || tries >= maxTries) clearInterval(interval);
       }, 200);
 
       stopInit = () => clearInterval(interval);
@@ -500,16 +489,13 @@ if (form) {
 
       await docRef.set(orderPayload);
 
-      // ✅ Handshake: avisar al popup que el pedido ya existe en Firestore
-      // para que Apps Script dispare dispatchWorker(orderId) sin race.
+      // ✅ Avisar al popup que el pedido ya existe (para dispatchWorker sin race)
       if (popup && !popup.closed) {
-        try {
-          // origen estricto (si lo tenemos)
-          if (popupOrigin) popup.postMessage({ type: "order_saved", orderId }, popupOrigin);
-          else popup.postMessage({ type: "order_saved", orderId }, "*");
-        } catch (e) {
-          console.warn("No se pudo enviar order_saved al uploader:", e);
-        }
+        const msgSaved = { type: "order_saved", orderId };
+        try { popup.postMessage(msgSaved, "https://script.google.com"); } catch {}
+        try { popup.postMessage(msgSaved, "https://script.googleusercontent.com"); } catch {}
+        // fallback opcional:
+        // try { popup.postMessage(msgSaved, "*"); } catch {}
       }
 
       renderSummary(fd, normalizedFiles);
@@ -531,25 +517,19 @@ if (form) {
 
         setUIOrderStatus(orderId, st, hint);
 
-        // Preview
         const pv = data.preview;
         if (pv && pv.url && previewLink) {
           previewLink.href = pv.url;
           previewLink.classList.remove("hidden");
         }
 
-        // Quote oficial
         const q = data.quote;
         if (q && q.total_clp != null) renderQuote(q);
 
-        // Error
         if (st === "error" && data.error && data.error.message) {
           alert("Error: " + data.error.message);
         }
       });
-
-      // cleanup listener ready
-      window.removeEventListener("message", onReady);
 
     } catch (err) {
       console.error(err);
@@ -560,6 +540,7 @@ if (form) {
       if (statusEl) statusEl.textContent = "";
     } finally {
       if (stopInit) stopInit();
+      if (onReady) window.removeEventListener("message", onReady);
       if (btn) btn.disabled = false;
     }
   });

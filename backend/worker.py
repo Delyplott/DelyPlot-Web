@@ -6,7 +6,7 @@ import json
 import base64
 import tempfile
 import traceback
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List
 
 import requests
 from dotenv import load_dotenv
@@ -20,23 +20,29 @@ from delyplot.preview import generate_preview_pdf
 
 load_dotenv()
 
-GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
-WORKER_SECRET = os.environ.get("WORKER_SECRET", "")
-WORKER_ID = os.environ.get("WORKER_ID", "worker-local-1")
+# ✅ Blindaje: strip() para evitar %0A / espacios invisibles en secrets
+GOOGLE_APPLICATION_CREDENTIALS = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "") or "").strip()
+APPS_SCRIPT_URL = (os.environ.get("APPS_SCRIPT_URL", "") or "").strip()
+WORKER_SECRET = (os.environ.get("WORKER_SECRET", "") or "").strip()
+WORKER_ID = (os.environ.get("WORKER_ID", "worker-local-1") or "").strip()
 
 # GitHub Actions mode (run-and-exit)
 RUN_ONCE = os.getenv("RUN_ONCE", "0") == "1"
 ORDER_ID = (os.getenv("ORDER_ID", "") or "").strip() or None
-# Si llega ORDER_ID por dispatch pero el doc aún no se escribe, esperamos un poco (segundos)
 ORDER_WAIT_SECS = float(os.getenv("ORDER_WAIT_SECS", "25"))
 
+# ✅ Validaciones duras
 if not GOOGLE_APPLICATION_CREDENTIALS or not os.path.exists(GOOGLE_APPLICATION_CREDENTIALS):
   raise RuntimeError("Falta GOOGLE_APPLICATION_CREDENTIALS o no existe el archivo.")
 if not APPS_SCRIPT_URL:
   raise RuntimeError("Falta APPS_SCRIPT_URL.")
 if not WORKER_SECRET:
   raise RuntimeError("Falta WORKER_SECRET.")
+
+# Si por cualquier motivo quedó whitespace dentro (p.ej. salto de línea al final),
+# lo detectamos explícitamente.
+if any(ch.isspace() for ch in APPS_SCRIPT_URL):
+  raise RuntimeError(f"APPS_SCRIPT_URL contiene whitespace invisible. repr={APPS_SCRIPT_URL!r}")
 
 cred = credentials.Certificate(GOOGLE_APPLICATION_CREDENTIALS)
 firebase_admin.initialize_app(cred)
@@ -116,7 +122,7 @@ def process_order(order_id: str, order: Dict[str, Any]) -> None:
     with open(in_path, "wb") as f:
       f.write(raw)
 
-    # 2) Analyze (coverage, page size, pages, etc.)
+    # 2) Analyze
     analysis = analyze_file(in_path)
 
     # 3) Preview PDF
@@ -142,7 +148,7 @@ def process_order(order_id: str, order: Dict[str, Any]) -> None:
       "contentType": "application/pdf"
     }
 
-    # 4) Quote oficial
+    # 4) Quote
     quote = calculate_quote(order, analysis)
 
     # 5) Write back
@@ -183,6 +189,7 @@ def main_loop():
   mode = "RUN_ONCE" if RUN_ONCE else "DAEMON"
   tgt = f"ORDER_ID={ORDER_ID}" if ORDER_ID else "QUEUE"
   print(f"Worker started. mode={mode} target={tgt}")
+  print(f"APPS_SCRIPT_URL={APPS_SCRIPT_URL!r}")  # útil para confirmar que NO hay %0A
 
   while True:
     try:
@@ -200,11 +207,8 @@ def main_loop():
 
         claimed = claim_order(tx, doc_ref)
 
-        # Si venimos con ORDER_ID, puede que el pedido exista pero aún no esté "uploaded".
-        # En ese caso, para RUN_ONCE esperamos un poco (hasta ORDER_WAIT_SECS) en vez de terminar altiro.
         if ORDER_ID and not claimed:
           if RUN_ONCE:
-            # Espera breve a que el frontend termine de escribir status=uploaded
             deadline = time.time() + ORDER_WAIT_SECS
             while time.time() < deadline:
               snap2 = doc_ref.get()

@@ -31,6 +31,31 @@
       );
     }
   </script>
+
+  <!-- ✅ NUEVO: Listener temprano para postMessage desde Apps Script (evita perder mensajes por COOP/opener null) -->
+  <script>
+    (function () {
+      // Cache global por orderId: { files: [...], ts: number }
+      window.__DRIVE_UPLOAD_CACHE__ = window.__DRIVE_UPLOAD_CACHE__ || Object.create(null);
+
+      function isFromAppsScript(origin) {
+        return origin === "https://script.google.com" ||
+               origin === "https://script.googleusercontent.com";
+      }
+
+      window.addEventListener("message", function (ev) {
+        if (!isFromAppsScript(ev.origin)) return;
+
+        var msg = ev.data || {};
+        if (msg.type === "drive_upload_done" && msg.orderId) {
+          window.__DRIVE_UPLOAD_CACHE__[String(msg.orderId)] = {
+            files: Array.isArray(msg.files) ? msg.files : [],
+            ts: Date.now()
+          };
+        }
+      }, false);
+    })();
+  </script>
 </head>
 
 <body>

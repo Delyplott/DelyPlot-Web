@@ -4,7 +4,7 @@
 // 1) Nueva paleta "neutral" (oscuro moderno sobrio)
 // 2) Paleta por defecto: "neutral" (en vez de "neon")
 // 3) ✅ Elimina dependencia de opener/postMessage (COOP)
-// 4) ✅ Polling al WebApp (ui=result) para obtener IDs subidos
+// 4) ✅ Polling JSONP al WebApp (ui=result) para obtener IDs subidos
 //    uploader.html guarda el resultado vía saveUploadResult(orderId, files)
 // =========================================================
 
@@ -71,7 +71,7 @@ function applyTheme(theme) {
 function initTheme() {
   const saved = localStorage.getItem(THEME_KEY);
   if (saved === "light" || saved === "dark") return applyTheme(saved);
-  applyTheme("dark"); // default
+  applyTheme("dark");
 }
 
 function applyPalette(palette) {
@@ -137,11 +137,8 @@ const APPS_SCRIPT_URL = window.APPS_SCRIPT_URL; // URL .../exec del Web App
 function buildUploaderUrl(orderId) {
   if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL en firebase-config.js");
   let u;
-  try {
-    u = new URL(APPS_SCRIPT_URL);
-  } catch {
-    throw new Error("APPS_SCRIPT_URL inválida (debe ser URL absoluta del Web App /exec).");
-  }
+  try { u = new URL(APPS_SCRIPT_URL); }
+  catch { throw new Error("APPS_SCRIPT_URL inválida (debe ser URL absoluta del Web App /exec)."); }
   u.searchParams.set("ui", "uploader");
   u.searchParams.set("orderId", String(orderId || ""));
   return u.toString();
@@ -154,69 +151,93 @@ function openUploader(orderId) {
   return w;
 }
 
-// ✅ Polling al WebApp: ?ui=result&orderId=...
-function buildResultUrl(orderId) {
+// ✅ JSONP: ?ui=result&orderId=...&callback=...
+function buildResultUrlJsonp(orderId, callbackName) {
   if (!APPS_SCRIPT_URL) throw new Error("Falta APPS_SCRIPT_URL en firebase-config.js");
   const u = new URL(APPS_SCRIPT_URL);
   u.searchParams.set("ui", "result");
   u.searchParams.set("orderId", String(orderId || ""));
+  u.searchParams.set("callback", String(callbackName || ""));
+  u.searchParams.set("_ts", String(Date.now())); // nocache
   return u.toString();
 }
 
+function jsonp(url, callbackName, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = url;
+
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error("JSONP timeout"));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      try { delete window[callbackName]; } catch {}
+      if (script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    window[callbackName] = (data) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(data);
+    };
+
+    script.onerror = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error("JSONP load error"));
+    };
+
+    document.head.appendChild(script);
+  });
+}
+
 /**
- * Espera el resultado subido consultando al WebApp (sin postMessage).
- * Requiere que Apps Script doGet(ui=result) retorne JSON:
- * - { ok:true, ready:false } mientras no exista
- * - { ok:true, ready:true, files:[{filename,fileId,contentType,size}...] } cuando esté listo
+ * Espera el resultado consultando al WebApp con JSONP (NO CORS).
+ * Apps Script doGet(ui=result) debe devolver:
+ * callback({ ok:true, ready:false }) mientras no exista
+ * callback({ ok:true, ready:true, files:[...] }) cuando esté listo
  */
 async function waitUploaderResultByPolling(orderId, popupWindow) {
-  const TIMEOUT_MS = 10 * 60 * 1000; // 10 min
+  const TIMEOUT_MS = 10 * 60 * 1000;
   const START = Date.now();
-  const url = buildResultUrl(orderId);
 
-  // Para evitar cache raro
-  const withNoCache = (base) => {
-    const u = new URL(base);
-    u.searchParams.set("_ts", String(Date.now()));
-    return u.toString();
-  };
-
-  // backoff suave
   let delay = 600;
 
   while (true) {
-    // si cerró antes de tiempo, igual podemos seguir unos segundos, pero normalmente es error
-    if (popupWindow && popupWindow.closed) {
-      // si cerró, no abortamos de inmediato: quizás ya guardó resultado. Solo seguimos un poco.
+    if (Date.now() - START > TIMEOUT_MS) {
+      throw new Error("Tiempo de espera agotado. No llegó resultado del uploader (polling JSONP).");
     }
 
-    if (Date.now() - START > TIMEOUT_MS) {
-      throw new Error("Tiempo de espera agotado. No llegó resultado del uploader (polling).");
-    }
+    // Si cerró, igual seguimos (puede ya haber guardado resultado)
+    // No hacemos throw inmediato.
+
+    const cb = "__dely_jsonp_cb_" + Math.random().toString(36).slice(2);
+    const url = buildResultUrlJsonp(orderId, cb);
 
     try {
-      const res = await fetch(withNoCache(url), {
-        method: "GET",
-        headers: { "Accept": "application/json" },
-        cache: "no-store",
-        mode: "cors"
-      });
-
-      // Si el WebApp no permite CORS, esto fallará (TypeError). En ese caso hay que ajustar doGet headers.
-      const data = await res.json();
+      const data = await jsonp(url, cb, 9000);
 
       if (data && data.ok && data.ready && Array.isArray(data.files) && data.files.length) {
         return data.files;
       }
-      // si no está listo, seguimos esperando
+      // no listo: seguimos
     } catch (e) {
-      // Si hubo error de red/CORS, reintentamos con delay creciente
-      // (igual te va a quedar el error en consola para diagnosticar)
-      console.warn("Polling error:", e);
+      console.warn("Polling JSONP error:", e);
+      // seguimos igual con backoff
     }
 
     await new Promise(r => setTimeout(r, delay));
-    delay = Math.min(2000, Math.floor(delay * 1.15));
+    delay = Math.min(2200, Math.floor(delay * 1.15));
   }
 }
 
@@ -414,7 +435,7 @@ if (form) {
       if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
       setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
 
-      // ✅ 2) Esperar resultado vía polling (NO postMessage)
+      // ✅ 2) Esperar resultado vía JSONP polling (NO CORS)
       const uploaded = await waitUploaderResultByPolling(orderId, popup);
       if (!uploaded.length) throw new Error("No se subió ningún archivo en el uploader.");
 

@@ -12,30 +12,41 @@
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&display=swap" rel="stylesheet">
 
-  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
-  <link rel="stylesheet" href="/DelyPlot-Web/styles.css" />
+  <!-- ✅ RUTAS RELATIVAS (funciona si todo vive en /frontend/ y se publica esa carpeta) -->
+  <link rel="stylesheet" href="./styles.css" />
 
   <!-- Firebase (Compat para usar <script> clásico) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 
-  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
-  <script src="/DelyPlot-Web/firebase-config.js" onerror="window.__FIREBASE_CONFIG_LOAD_FAILED__=true;"></script>
-  <script>
-    if (window.__FIREBASE_CONFIG_LOAD_FAILED__) {
-      alert(
-        "No se pudo cargar /DelyPlot-Web/firebase-config.js.\n\n" +
-        "Verifica que el archivo exista en la carpeta /frontend/ del repo y esté publicado.\n" +
-        "Luego haz commit/push y recarga con Ctrl+F5."
-      );
-    }
-  </script>
-
-  <!-- ✅ NUEVO: Listener temprano para postMessage desde Apps Script (evita perder mensajes por COOP/opener null) -->
+  <!-- ✅ Debe cargarse ANTES de script.js -->
+  <script src="./firebase-config.js" onerror="window.__FIREBASE_CONFIG_LOAD_FAILED__=true;"></script>
   <script>
     (function () {
-      // Cache global por orderId: { files: [...], ts: number }
+      if (window.__FIREBASE_CONFIG_LOAD_FAILED__) {
+        alert(
+          "No se pudo cargar ./firebase-config.js\n\n" +
+          "Asegúrate de que 'firebase-config.js' esté en la MISMA carpeta que este index.html (frontend/).\n" +
+          "Luego haz commit/push y recarga con Ctrl+F5."
+        );
+        return;
+      }
+      // Chequeo mínimo (por si cargó pero no definió variables)
+      if (!window.FIREBASE_CONFIG || !window.APPS_SCRIPT_URL) {
+        alert(
+          "firebase-config.js cargó, pero faltan variables.\n\n" +
+          "Debe definir:\n" +
+          "- window.FIREBASE_CONFIG = {...}\n" +
+          "- window.APPS_SCRIPT_URL = 'https://script.google.com/.../exec'\n"
+        );
+      }
+    })();
+  </script>
+
+  <!-- (Opcional) Listener temprano postMessage como fallback (NO es crítico si ya usas polling) -->
+  <script>
+    (function () {
       window.__DRIVE_UPLOAD_CACHE__ = window.__DRIVE_UPLOAD_CACHE__ || Object.create(null);
 
       function isFromAppsScript(origin) {
@@ -141,7 +152,6 @@
           <textarea name="notas" rows="3" placeholder="Indícanos detalles de ploteo/doblado, dirección si es delivery, etc."></textarea>
         </label>
 
-        <!-- ✅ Archivos: ahora se suben en la ventana emergente -->
         <div class="box" style="margin-top:14px;">
           <p style="margin:0;"><b>Archivos:</b> se cargarán en una <b>ventana emergente</b> después de presionar <b>“Enviar pedido”</b>.</p>
           <p class="tiny" style="margin:8px 0 0;">
@@ -253,7 +263,7 @@
     </div>
   </footer>
 
-  <!-- ✅ RUTA ABSOLUTA para Project Pages -->
-  <script src="/DelyPlot-Web/script.js"></script>
+  <!-- ✅ script.js al final (y en la misma carpeta que index.html) -->
+  <script src="./script.js"></script>
 </body>
 </html>

@@ -218,22 +218,16 @@ async function waitUploaderResultByPolling(orderId, popupWindow) {
       throw new Error("Tiempo de espera agotado. No llegó resultado del uploader (polling JSONP).");
     }
 
-    // Si cerró, igual seguimos (puede ya haber guardado resultado)
-    // No hacemos throw inmediato.
-
     const cb = "__dely_jsonp_cb_" + Math.random().toString(36).slice(2);
     const url = buildResultUrlJsonp(orderId, cb);
 
     try {
       const data = await jsonp(url, cb, 9000);
-
       if (data && data.ok && data.ready && Array.isArray(data.files) && data.files.length) {
         return data.files;
       }
-      // no listo: seguimos
     } catch (e) {
       console.warn("Polling JSONP error:", e);
-      // seguimos igual con backoff
     }
 
     await new Promise(r => setTimeout(r, delay));

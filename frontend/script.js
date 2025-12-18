@@ -3,11 +3,10 @@
 // Cambios incluidos:
 // 1) Nueva paleta "neutral" (oscuro moderno sobrio)
 // 2) Paleta por defecto: "neutral" (en vez de "neon")
-// 3) ✅ Handshake postMessage: GitHub -> Apps Script popup ("order_saved")
-//    para disparar GitHub Actions vía Apps Script (dispatchWorker) sin race
-// 4) ✅ window.open sin perder opener (noopener=no) para evitar "No hay opener"
-// 5) ✅ postMessage a popup con targetOrigin="*" (porque Apps Script a veces usa
-//    script.google.com o script.googleusercontent.com como origin)
+// 3) ✅ Handshake postMessage: GitHub -> Apps Script popup ("uploader_init" / "uploader_ready")
+//    para evitar que el popup no tenga opener (COOP) y aun así devuelva IDs.
+// 4) ✅ Handshake "order_saved" (GitHub -> popup) para que Apps Script dispare dispatchWorker(orderId)
+//    sin race condition (primero Firestore, luego dispatch).
 // =========================================================
 
 // ——— Utilidades ———
@@ -87,7 +86,7 @@ function applyPalette(palette) {
 
 function initPalette() {
   const saved = localStorage.getItem(PALETTE_KEY);
-  // ✅ default "neutral" (oscuro moderno sobrio)
+  // ✅ default "neutral"
   const p = palettes.includes(saved) ? saved : "neutral";
   applyPalette(p);
 }
@@ -153,17 +152,13 @@ function buildUploaderUrl(orderId) {
 
 function openUploader(orderId) {
   const url = buildUploaderUrl(orderId);
-
-  // ✅ Importante: evitar que el navegador quite window.opener
-  // (muchos navegadores aplican noopener por seguridad en algunos casos)
-  const w = window.open(url, "dely_uploader", "width=560,height=760,noopener=no");
-
+  const w = window.open(url, "dely_uploader", "width=560,height=760");
   if (!w) throw new Error("Popup bloqueado. Habilite ventanas emergentes para continuar.");
   return w;
 }
 
 /**
- * Espera el postMessage desde Apps Script:
+ * ✅ Espera el postMessage desde Apps Script:
  * { type:"drive_upload_done", orderId, files:[{filename,fileId,contentType,size}] }
  */
 function waitUploaderResult(orderId, popupWindow) {
@@ -384,8 +379,12 @@ if (form) {
     const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = true;
 
-    // ✅ Mantener referencia del popup para handshake
     let popup = null;
+    let popupOrigin = null;
+
+    // ✅ handshake state
+    let uploaderReady = false;
+    let stopInit = null;
 
     try {
       if (statusEl) statusEl.textContent = "Autenticando…";
@@ -410,6 +409,48 @@ if (form) {
 
       if (statusEl) statusEl.textContent = "Abriendo uploader… (permite popups)";
       popup = openUploader(orderId);
+
+      // Origin del popup (Apps Script)
+      try {
+        popupOrigin = new URL(APPS_SCRIPT_URL).origin; // normalmente https://script.google.com
+      } catch {
+        popupOrigin = null;
+      }
+
+      // ✅ Escuchar ACK opcional del popup
+      const onReady = (ev) => {
+        const okOrigin =
+          ev.origin === "https://script.google.com" ||
+          ev.origin === "https://script.googleusercontent.com";
+        if (!okOrigin) return;
+        const msg = ev.data || {};
+        if (msg.type !== "uploader_ready") return;
+        if (String(msg.orderId || "") !== String(orderId || "")) return;
+        uploaderReady = true;
+      };
+      window.addEventListener("message", onReady);
+
+      // ✅ Enviar uploader_init con reintentos (por si el popup aún está cargando)
+      const sendInit = () => {
+        if (!popup || popup.closed) return;
+        try {
+          // preferimos origin exacto si lo tenemos
+          if (popupOrigin) popup.postMessage({ type: "uploader_init", orderId }, popupOrigin);
+          else popup.postMessage({ type: "uploader_init", orderId }, "*");
+        } catch {}
+      };
+
+      let tries = 0;
+      const maxTries = 15; // ~3s si interval 200ms
+      const interval = setInterval(() => {
+        tries++;
+        sendInit();
+        if (uploaderReady || tries >= maxTries) {
+          clearInterval(interval);
+        }
+      }, 200);
+
+      stopInit = () => clearInterval(interval);
 
       if (statusEl) statusEl.textContent = "Esperando subida en la ventana…";
       setUIOrderStatus(orderId, "awaiting_upload", "En la ventana emergente, seleccione sus archivos y presione “Subir”.");
@@ -459,11 +500,13 @@ if (form) {
 
       await docRef.set(orderPayload);
 
-      // ✅ Handshake: avisar al popup que ya existe el doc en Firestore
-      // targetOrigin="*" porque Apps Script a veces cambia el origin real
+      // ✅ Handshake: avisar al popup que el pedido ya existe en Firestore
+      // para que Apps Script dispare dispatchWorker(orderId) sin race.
       if (popup && !popup.closed) {
         try {
-          popup.postMessage({ type: "order_saved", orderId }, "*");
+          // origen estricto (si lo tenemos)
+          if (popupOrigin) popup.postMessage({ type: "order_saved", orderId }, popupOrigin);
+          else popup.postMessage({ type: "order_saved", orderId }, "*");
         } catch (e) {
           console.warn("No se pudo enviar order_saved al uploader:", e);
         }
@@ -505,6 +548,9 @@ if (form) {
         }
       });
 
+      // cleanup listener ready
+      window.removeEventListener("message", onReady);
+
     } catch (err) {
       console.error(err);
       alert("No se pudo enviar el pedido: " + (err?.message || String(err)));
@@ -513,6 +559,7 @@ if (form) {
       if (quoteCard) quoteCard.classList.add("hidden");
       if (statusEl) statusEl.textContent = "";
     } finally {
+      if (stopInit) stopInit();
       if (btn) btn.disabled = false;
     }
   });
@@ -556,11 +603,9 @@ if (newOrderBtn) {
     if (orderCard) orderCard.classList.remove("hidden");
     if (form) form.reset();
 
-    // Si existiera UI vieja de archivos, limpiar
     filesState = [];
     renderFiles();
 
-    // limpiar UI quote
     if (previewLink) previewLink.classList.add("hidden");
     if (quoteContainer) quoteContainer.classList.add("hidden");
     if (quoteWait) quoteWait.classList.remove("hidden");

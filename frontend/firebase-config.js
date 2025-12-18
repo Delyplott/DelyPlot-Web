@@ -8,6 +8,6 @@ window.FIREBASE_CONFIG = {
   measurementId: "G-2KLXLY1MF7" // opcional (puedes borrar esta línea si quieres)
 };
 
-window.APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzRZawRqbhNy09bjnIh2Y46RiFcEjjefe4aGNHo8R7G4myRTa45oF48tF_F5Yau1trUfg/exec";
+window.APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwVlstOncR7OFZ3-a_I8eIFI-M8ixe9-ki_uybI2WWyCABkzDGRnR7IZbtdX7r21Tbb/exec";
 
 window.DELY_SETTINGS = { MAX_FILE_MB: 20 };

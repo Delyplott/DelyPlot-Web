@@ -1,19 +1,16 @@
 name: delyplott-worker-dispatch
 
 on:
-  # ✅ Automático (gratis): GitHub cron mínimo práctico ~5 min
   schedule:
     - cron: "*/5 * * * *"
 
-  # ✅ Manual (opcional). orderId ahora NO es requerido
   workflow_dispatch:
     inputs:
       orderId:
-        description: "Order ID (Firestore) a procesar (opcional; si lo dejas vacío procesa cola)"
+        description: "Order ID (Firestore) a procesar (opcional; vacío = cola)"
         required: false
         type: string
 
-  # ✅ Si lo usas desde el frontend con repository_dispatch
   repository_dispatch:
     types: [run-worker]
 
@@ -43,10 +40,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # ✅ Evita problemas de newlines/quotes en el secret
-          cat > firebase_sa.json << 'EOF'
-          $FIREBASE_SERVICE_ACCOUNT_JSON
-          EOF
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > firebase_sa.json
 
       - name: Run worker (auto queue window)
         working-directory: backend
@@ -54,15 +48,11 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/backend/firebase_sa.json
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
-
-          # ✅ Worker en modo ventana (procesa cola durante X segundos y sale)
           RUN_ONCE: "1"
-          RUN_WINDOW_SECS: "240"   # ~4 min dentro del job de 5 min
-          POLL_SECS: "4"           # polling rápido para “fluidez”
+          RUN_WINDOW_SECS: "240"
+          POLL_SECS: "4"
           BATCH_LIMIT: "5"
-          ORDER_WAIT_SECS: "10"    # si se usa ORDER_ID, espera menos
-
-          # ✅ ORDER_ID opcional: manual input o repository_dispatch payload
+          ORDER_WAIT_SECS: "10"
           ORDER_ID: ${{ github.event.inputs.orderId || github.event.client_payload.orderId }}
         run: |
           python worker.py
